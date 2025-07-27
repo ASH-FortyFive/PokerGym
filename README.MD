@@ -3,6 +3,8 @@
 A poker simulation and reinforcement learning environment.
 Users Gymnasium (formerly OpenAI gym) to create a poker environment for training agents.
 
+Following poker rules from [World Poker Tour](https://www.worldpokertour.com/learn/texas-holdem-rules/).
+
 ## Installation
 To run the environment, you need to install the required dependencies. You can do this using conda:
 
@@ -24,3 +26,4 @@ TODO
 | Random Poker Agent |  |
 | Reinforcement Learning Poker Agent |  |
 | Test Cases |  |
+| Deal with side-pots |  |
