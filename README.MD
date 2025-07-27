@@ -16,8 +16,11 @@ TODO
 - None
 
 ### Goals
-- Implement a poker environment
-- Implement a generic poker agent
-- Implement a poker agent using random choices
-- Implement a poker agent using reinforcement learning
-- Add some test cases
+| Task | Status |
+|------|--------|
+| Set-up Project | ✔ |
+| Basic Poker Environment |  |
+| Basic Poker Agent |  |
+| Random Poker Agent |  |
+| Reinforcement Learning Poker Agent |  |
+| Test Cases |  |
