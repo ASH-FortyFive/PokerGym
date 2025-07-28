@@ -27,3 +27,15 @@ class SeededDeck(Deck):
 
     def __len__(self):
         return len(self.cards)
+
+def card_to_int(card: Card) -> int:
+    """
+    Convert a deuces Card to low dim integer representation.
+    0 is no card, 1-52 are the cards.
+    1-13 are the ranks of Spades, 14-26 are Hearts,
+    27-39 are Diamonds, and 40-52 are Clubs.
+    """
+    rank_int = Card.get_rank_int(card)
+    suit_int = Card.get_suit_int(card) 
+    suit_int = (suit_int & -suit_int).bit_length() - 1
+    return rank_int + 13*suit_int + 1

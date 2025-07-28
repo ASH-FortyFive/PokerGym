@@ -3,7 +3,7 @@
 A poker simulation and reinforcement learning environment.
 Users Gymnasium (formerly OpenAI gym) to create a poker environment for training agents.
 
-Following poker rules from [World Poker Tour](https://www.worldpokertour.com/learn/texas-holdem-rules/).
+Following poker rules from [Poker Tournament Directors Association](https://www.pokertda.com/poker-tda-rules/).
 
 ## Installation
 To run the environment, you need to install the required dependencies. You can do this using conda:

@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from deuces import Card
-
+from pokergym.env.enums import Action
 
 @dataclass
 class Player:
@@ -14,6 +14,7 @@ class Player:
     bet: int = 0
     total_contribution: int = 0
     active: bool = True
+    last_action: Action = None
 
     def reset_for_new_hand(self):
         self.hand = []

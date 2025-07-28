@@ -1,13 +1,13 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
+import gymnasium as gym
 import numpy as np
 from deuces import Card, Deck, Evaluator
+from gymnasium.spaces import Box, Dict, Discrete, MultiBinary, MultiDiscrete
+from pettingzoo import AECEnv
 
-# import gymnasium as gym
-from pettingzoo import ParallelEnv
-
-from pokergym.env.cards import WORST_RANK, SeededDeck
+from pokergym.env.cards import WORST_RANK, SeededDeck, card_to_int
 from pokergym.env.config import PokerConfig
 from pokergym.env.enums import Action, BettingRound
 from pokergym.env.player import Player
@@ -56,7 +56,7 @@ class PokerGameState:
         self.deck = SeededDeck(seed) if seed is not None else SeededDeck()
 
 
-class PokerEnv(ParallelEnv):
+class PokerEnv(AECEnv):
     metadata = {
         "name": "PokerEnv_v0",
     }
@@ -89,58 +89,217 @@ class PokerEnv(ParallelEnv):
         self.state.reset(seed)
         return self.state, {}
 
-    def step(self, actons):
-        pass
+    def action_space(self, agent):
+        """
+        Get the space of all possible actions for the agent.
+        """
+        return Dict(
+            {
+                "action": Discrete(len(Action)),  # Action space for the agent
+                "raise_amount": Box(low=0.0, high=1.0, shape=()),  # Amount to raise
+            }
+        )
+
+    def _get_action_mask(self, agent):
+        """
+        Mask actions based on the current game state.
+        """
+        max_chips = (
+            self.config.starting_stack * self.config.num_players + 1
+        )  # +1 to allow for no bet (0)
+        player = self.state.players[agent.idx]
+        mask = [0] * len(Action)  # Initialize all actions as invalid
+        min_raise = 0.0
+        max_raise = 0.0
+
+        if player.folded or not player.active:
+            # If the player is folded or inactive, only allow PASS
+            return {
+                "action_mask": np.array(mask, dtype=np.int8),
+                "min_raise": min_raise,
+                "max_raise": max_raise,
+            }
+
+        mask[Action.FOLD.value] = 1  # Always allow folding
+
+        # Player's bet matches the current bet. They can CHECK or RAISE.
+        if player.bet == self.state.current_bet:
+            mask[Action.CHECK.value] = 1
+            # Check if they have enough chips to make a minimum raise.
+            if player.chips >= self.config.min_raise:
+                mask[Action.RAISE.value] = 1
+                min_raise = self.config.min_raise / max_chips
+                max_raise = player.chips / max_chips
+        # Player's bet is less than the current bet. They can CALL or RAISE.
+        elif player.bet < self.state.current_bet:
+            # Player can call (or go all-in) if they have any chips left.
+            if player.chips > 0:
+                mask[Action.CALL.value] = 1
+
+            # To raise, they must be able to at least match the call amount plus a minimum raise.
+            # An all-in raise for less than a min-raise is also possible if they have more than `to_call`.
+            to_raise = self.state.current_bet - player.bet + self.config.min_raise
+            if player.chips >= to_raise:
+                mask[Action.RAISE.value] = 1
+                min_raise = to_raise / max_chips
+                max_raise = player.chips / max_chips
+        else:
+            # This case should not happen in a valid game state.
+            raise ValueError("Player bet exceeds current bet, inconsistent state.")
+
+        return {
+            "action_mask": np.array(mask, dtype=np.int8),
+            "min_raise": min_raise,
+            "max_raise": max_raise,
+        }
 
     def observation_space(self, agent):
-        return self.observation_space[agent]
+        N = self.config.num_players
+        return Dict(
+            {
+                # Per-agent observations
+                "hand": MultiDiscrete(
+                    [53] * self.config.max_hand_cards
+                ),  # 53 to account for no card
+                # Global observations
+                ## Table state
+                "community_cards": MultiDiscrete(
+                    [53] * self.config.max_community_cards
+                ),  # 53 to account for no card
+                "pot": Box(low=0.0, high=1.0, shape=()),
+                "current_bet": Box(low=0.0, high=1.0, shape=()),
+                ## Relative player locations
+                "chip_counts": Box(low=0.0, high=1.0, shape=(N,)),
+                "bets": Box(low=0.0, high=1.0, shape=(N,)),
+                "total_contribution": Box(low=0.0, high=1.0, shape=(N,)),
+                "folded": MultiBinary(N),
+                "all_in": MultiBinary(N),
+                "active": MultiBinary(N),
+                "relative_dealer_position": Box(
+                    low=0.0, high=1.0, shape=(1,)
+                ),
+                ## Meta Observations
+                "betting_round": Discrete(len(BettingRound)),
+                "round_number": Box(low=0.0, high=1.0, shape=()),
+                # Action Masks
+                "action_mask": MultiBinary(len(Action)),  # 0 or 1 for each action
+                "min_raise": Box(low=0.0, high=1.0, shape=()),
+                "max_raise": Box(low=0.0, high=1.0, shape=()),
+            }
+        )
 
-    def action_space(self, agent):
-        return self.action_space[agent]
-    
+    def _get_obs(self, agent):
+        """
+        Get the observation space for a specific agent.
+        The observation includes the agent's hand and the global observation.
+        """
+        obs = self._get_global_obs()
+        obs.update(self._get_agent_obs(agent))
+        obs.update(self._get_action_mask(agent))
+
+        relative_obs = [
+            "chip_counts",
+            "bets",
+            "total_contribution",
+            "folded",
+            "all_in",
+            "active",
+        ]
+        for key in relative_obs:
+            obs[key] = self._rotate_to_idx(obs[key], agent.idx)
+        obs["relative_dealer_position"] = np.array(
+            [
+                (self.state.dealer_idx - agent.idx)
+                % self.config.num_players
+                / self.config.num_players
+            ]
+        )
+        return obs
+
     def _get_global_obs(self):
         """
         Get the observation visible to all agents.
         This includes the community cards, pot, current bet, and betting round.
         """
+        max_chips = (
+            self.config.starting_stack * self.config.num_players + 1
+        )  # +1 to allow for no bet (0)
         obs = {
-            "community_cards": self.state.community_cards,
-            "pot": self.state.pot,
-            "current_bet": self.state.current_bet,
+            "community_cards": [card_to_int(card) for card in self.state.community_cards],
+            "pot": self.state.pot / max_chips,
+            "current_bet": self.state.current_bet / max_chips,
             "betting_round": self.state.betting_round,
-            "bets": [],
-            "active": [],
-            "all_in": [],
-            "folded": [],
+            "chip_counts": [player.chips / max_chips for player in self.state.players],
+            "bets": [player.bet / max_chips for player in self.state.players],
+            "total_contribution": [
+                player.total_contribution / max_chips for player in self.state.players
+            ],
+            "folded": [player.folded for player in self.state.players],
+            "all_in": [player.all_in for player in self.state.players],
+            "active": [player.active for player in self.state.players],
+            "round_number": (
+                self.state.round_number / self.config.max_rounds
+                if self.config.max_rounds > 0
+                else 0
+            ),
         }
-        for i, player in enumerate(self.state.players):
-            obs["bets"].append(player.total_contribution)
-            obs["active"].append(player.active)
-            obs["all_in"].append(player.all_in)
-            obs["folded"].append(player.folded)
 
-
-        return {
-            "hand": player.hand,
-            "community_cards": self.state.community_cards,
-            "pot": self.state.pot,
-            "current_bet": self.state.current_bet,
-            "betting_round": self.state.betting_round,
-            "player_idx": player.idx,
-            "chips": player.chips,
-            "active": player.active,
-            "all_in": player.all_in,
-        }
+        return obs
 
     def _get_agent_obs(self, agent):
         """
         Get the observation specific to the agent.
         This includes the agent's hand and the global observation.
         """
-        player = self.state.players[agent]
+        player = self.state.players[agent.idx]
         return {
-            "hand": player.hand,
+            "hand": [card_to_int(card) for card in player.hand],
         }
+
+    def _rotate_to_idx(self, observation, idx):
+        """
+        Rotate an observation to be start at given idx.
+        """
+        return observation[idx:] + observation[:idx]
+
+    def step():
+        """
+        Execute one time step within the environment.
+        """
+        pass
+
+    def _handle_action(self, agent, action: Action, extra_bet: int = None):
+        """
+        Apply the action taken by the agent to the game state.
+        Allows for all actions defined in the Action enum.
+        Includes error handling for invalid actions.
+        """
+        assert (
+            agent.idx == self.state.current_player_idx
+        ), f"Player {agent.idx} attempted to take an action when it was not their turn."
+        player = self.state.players[agent.idx]
+        if action is None:
+            return True
+
+        if action is Action.FOLD:
+            player.folded = True
+        elif action is Action.CHECK:
+            assert (
+                player.bet == self.state.current_bet
+            ), "Player can only check if their bet matches the current bet."
+        elif action is Action.CALL:
+            assert player.chips > 0, "Player cannot call with no chips."
+            to_call = min(self.state.current_bet - player.bet, player.chips)
+            player.make_bet(to_call)
+        elif action is Action.RAISE:
+            assert (
+                player.bet + extra_bet >= self.state.current_bet + self.config.min_raise
+            ), "Player must raise at least the minimum raise amount."
+            player.make_bet(extra_bet)
+            self.state.current_bet = player.bet
+        else:
+            raise ValueError(f"Invalid action: {action} for player {agent.idx}.")
+        return True
 
     # Poker Logic
     def start_round(self, cards: Optional[dict[int, List[Card]]] = None):
@@ -204,35 +363,51 @@ class PokerEnv(ParallelEnv):
     def end_round(self):
         """
         End the current round of poker, determining the winner and distributing the pot.
-        TODO: Handle side pots.
         """
         # Find the winner(s) and distribute the pot
         assert (
             self.state.betting_round == BettingRound.SHOWDOWN
         ), "Cannot end round before showdown."
-        scores = np.array([self.evaluator.evaluate(player.hand, self.state.community_cards) for player in self.state.players])
+        scores = np.array(
+            [
+                self.evaluator.evaluate(player.hand, self.state.community_cards)
+                for player in self.state.players
+            ]
+        )
         pots = self._construct_pots()
         for pot_amount, player_indices in pots:
             # Determine the winners for this pot
             min_score = np.min(scores[player_indices])
-            pot_winners = [self.state.players[i] for i in player_indices if scores[i] == min_score]
+            pot_winners = [
+                self.state.players[i] for i in player_indices if scores[i] == min_score
+            ]
             assert pot_winners, "No winners found for the pot."
             # Split the pot among the winners
             split_amount = pot_amount // len(pot_winners)
             for winner in pot_winners:
-                winner.give_chips(split_amount) 
+                winner.give_chips(split_amount)
                 self.state.pot -= split_amount
-                print(f"Player {winner.idx} wins {split_amount} chips from the pot of {pot_amount}.")
+                print(
+                    f"Player {winner.idx} wins {split_amount} chips from the pot of {pot_amount}."
+                )
             remainder = pot_amount % len(pot_winners)
-            payout_player = self.state.players[self.next_active_player_idx(self.state.dealer_idx)]
+            payout_player = self.state.players[
+                self.next_active_player_idx(self.state.dealer_idx)
+            ]
             while remainder > 0:
                 if payout_player in pot_winners:
                     payout_player.give_chips(1)
                     self.state.pot -= 1
                     remainder -= 1
-                    print(f"Player {payout_player.idx} receives an extra chip from the pot of {pot_amount}.")
-                payout_player = self.state.players[self.next_active_player_idx(payout_player.idx)]
-        assert self.state.pot == 0, f"Pot not fully distributed, remaining: {self.state.pot}"
+                    print(
+                        f"Player {payout_player.idx} receives an extra chip from the pot of {pot_amount}."
+                    )
+                payout_player = self.state.players[
+                    self.next_active_player_idx(payout_player.idx)
+                ]
+        assert (
+            self.state.pot == 0
+        ), f"Pot not fully distributed, remaining: {self.state.pot}"
 
         # Remove Players who are out of chips
         active_count = self.config.num_players
@@ -275,7 +450,9 @@ class PokerEnv(ParallelEnv):
         elif self.state.betting_round == BettingRound.TURN:
             self.state.betting_round = BettingRound.RIVER
             self._collect_bets()
-            self.state.community_cards += self._draw_for_round(BettingRound.RIVER, cards)
+            self.state.community_cards += self._draw_for_round(
+                BettingRound.RIVER, cards
+            )
         elif self.state.betting_round == BettingRound.RIVER:
             self._collect_bets()
             self.state.betting_round = BettingRound.SHOWDOWN
@@ -347,7 +524,7 @@ class PokerEnv(ParallelEnv):
         contributions.sort(key=lambda x: x[1])
         pots = []
         while contributions:
-            min_contribution = contributions[0][1] # Smallest contribution
+            min_contribution = contributions[0][1]  # Smallest contribution
             eligible_players = []
             pot_amount = 0
             for idx, contribution, eligible in contributions:
@@ -363,4 +540,3 @@ class PokerEnv(ParallelEnv):
                 if contribution - min_contribution > 0
             ]
         return pots
-

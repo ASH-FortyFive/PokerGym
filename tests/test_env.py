@@ -2,6 +2,8 @@ from pokergym.env.config import PokerConfig
 from pokergym.env.enums import BettingRound
 from pokergym.env.poker_env import PokerEnv
 from pokergym.env.utils import short_pretty_str
+from pokergym.agents.base import Agent
+from pokergym.env.cards import card_to_int, SeededDeck
 
 import tyro
 
@@ -98,11 +100,32 @@ def test_random_game(config, seed=None):
             print(f"Game Over! Player {winner.idx} wins with {winner.chips} chips.")
             break
 
+def test_agent(config, seed=0):
+    env = PokerEnv(config=config)
+    env.render_mode = "terminal"
+    agents = [Agent(idx=i) for i in range(config.num_players)]
+    env.reset(seed)
+
+    obs = env._get_obs(agents[0])  # Initialize observation for the agent
+    env.render()
+    print(obs)
+
+    print("---Starting Round---")
+    env.start_round()
+    env.render()
+    obs = env._get_obs(agents[0])
+    print(obs)
+
+    print("Done")
+
+
+
 if __name__ == "__main__":
     # Use tyro to parse command line arguments
     config = tyro.cli(PokerConfig)
     # Example usage:    
     # python -m pokergym.enviroment.poker_env --num_players 5 --starting_stack 1000 --big_blind 100 --small_blind 50 --max_rounds 10000
-    test_fixed_game(config)
+    # test_fixed_game(config)
     # test_random_game(config, 2)  # Uncomment to run a random game simulation
+    test_agent(config, seed=0)  # Uncomment to test an agent
         

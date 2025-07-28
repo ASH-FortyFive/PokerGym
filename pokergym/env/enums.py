@@ -11,7 +11,7 @@ class BettingRound(Enum):
     END = auto()  # Represents the end of the game or round
 
 class Action(Enum):
-    FOLD = auto()
-    CHECK = auto()
-    CALL = auto()
-    RAISE = auto()
+    FOLD = 0
+    CALL = 1
+    CHECK = 2
+    RAISE = 3
