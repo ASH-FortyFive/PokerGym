@@ -316,10 +316,10 @@ class PokerEnv(AECEnv):
         extra_bet_chips = None
         if action["action"] == Action.RAISE:
             assert (
-                "extra_bet" in action is not None
-            ), "Raise requires an extra_bet amount."
+                "raise_amount" in action is not None
+            ), "Raise requires an raise_amount amount."
             max_chips = self.config.starting_stack * self.config.num_players + 1
-            extra_bet_chips = int(action["extra_bet"] * max_chips)
+            extra_bet_chips = int(action["raise_amount"] * max_chips)
 
         # Apply the action
         self._handle_action(player.idx, action["action"], extra_bet_chips)
