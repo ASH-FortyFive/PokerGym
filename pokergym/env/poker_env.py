@@ -79,17 +79,58 @@ class PokerEnv(AECEnv):
         )
         self.evaluator = Evaluator()
 
-        #
+    # AECEnv Attributes
+    @property
+    def agents(self):
+        return [i for i in range(len(self.state.players))]
+
+    @property
+    def num_agents(self):
+        return len(self.state.players)
+
+    @property
+    def possible_agents(self):
+        return self.agents
+
+    @property
+    def max_num_agents(self):
+        return self.config.num_players
+
+    @property
+    def agent_selection(self):
+        return self.state.current_player_idx
+
+    @property
+    def terminations(self):
+        return {player.idx: not player.active for player in self.state.players}
+
+    @property
+    def truncations(self):
+        return {agent: False for agent in self.agents}
+
+    @property
+    def rewards(self):
+        return {agent: 0 for agent in self.agents}
+
+    @property
+    def observation_spaces(self):
+        # All agents are identical in terms of observation space
+        return {agent: self.observation_space() for agent in self.agents}
+
+    @property
+    def action_spaces(self):
+        # All agents are identical in terms of action space
+        return {agent: self.action_space() for agent in self.agents}
 
     # Gymnasium Environment Methods
-    def reset(self, seed: Optional[int] = None):
+    def reset(self, seed: Optional[int] = None, **kwargs):
         """
         Reset the environment to the initial state.
         """
         self.state.reset(seed)
         return self.state, {}
 
-    def action_space(self, agent):
+    def action_space(self):
         """
         Get the space of all possible actions for the agent.
         """
@@ -107,7 +148,7 @@ class PokerEnv(AECEnv):
         max_chips = (
             self.config.starting_stack * self.config.num_players + 1
         )  # +1 to allow for no bet (0)
-        player = self.state.players[agent.idx]
+        player = self.state.players[agent]
         mask = [0] * len(Action)  # Initialize all actions as invalid
         min_raise = 0.0
         max_raise = 0.0
@@ -153,7 +194,7 @@ class PokerEnv(AECEnv):
             "max_raise": max_raise,
         }
 
-    def observation_space(self, agent):
+    def observation_space(self):
         N = self.config.num_players
         return Dict(
             {
@@ -175,9 +216,7 @@ class PokerEnv(AECEnv):
                 "folded": MultiBinary(N),
                 "all_in": MultiBinary(N),
                 "active": MultiBinary(N),
-                "relative_dealer_position": Box(
-                    low=0.0, high=1.0, shape=(1,)
-                ),
+                "relative_dealer_position": Box(low=0.0, high=1.0, shape=(1,)),
                 ## Meta Observations
                 "betting_round": Discrete(len(BettingRound)),
                 "round_number": Box(low=0.0, high=1.0, shape=()),
@@ -188,7 +227,7 @@ class PokerEnv(AECEnv):
             }
         )
 
-    def _get_obs(self, agent):
+    def observe(self, agent):
         """
         Get the observation space for a specific agent.
         The observation includes the agent's hand and the global observation.
@@ -206,10 +245,10 @@ class PokerEnv(AECEnv):
             "active",
         ]
         for key in relative_obs:
-            obs[key] = self._rotate_to_idx(obs[key], agent.idx)
+            obs[key] = self._rotate_to_idx(obs[key], agent)
         obs["relative_dealer_position"] = np.array(
             [
-                (self.state.dealer_idx - agent.idx)
+                (self.state.dealer_idx - agent)
                 % self.config.num_players
                 / self.config.num_players
             ]
@@ -225,7 +264,9 @@ class PokerEnv(AECEnv):
             self.config.starting_stack * self.config.num_players + 1
         )  # +1 to allow for no bet (0)
         obs = {
-            "community_cards": [card_to_int(card) for card in self.state.community_cards],
+            "community_cards": [
+                card_to_int(card) for card in self.state.community_cards
+            ],
             "pot": self.state.pot / max_chips,
             "current_bet": self.state.current_bet / max_chips,
             "betting_round": self.state.betting_round,
@@ -251,7 +292,7 @@ class PokerEnv(AECEnv):
         Get the observation specific to the agent.
         This includes the agent's hand and the global observation.
         """
-        player = self.state.players[agent.idx]
+        player = self.state.players[agent]
         return {
             "hand": [card_to_int(card) for card in player.hand],
         }
@@ -262,11 +303,58 @@ class PokerEnv(AECEnv):
         """
         return observation[idx:] + observation[:idx]
 
-    def step():
+    def step(self, action: Dict):
         """
         Execute one time step within the environment.
+        Input:
+        - action: A dictionary containing the "action" and optional "raise_amount".
         """
-        pass
+        # Take the Action
+        player = self.state.players[self.state.current_player_idx]
+
+        # Convert normalized raise amount to absolute chips if provided
+        extra_bet_chips = None
+        if action["action"] == Action.RAISE:
+            assert (
+                "extra_bet" in action is not None
+            ), "Raise requires an extra_bet amount."
+            max_chips = self.config.starting_stack * self.config.num_players + 1
+            extra_bet_chips = int(action["extra_bet"] * max_chips)
+
+        # Apply the action
+        self._handle_action(player.idx, action["action"], extra_bet_chips)
+        player.last_action = action
+
+        # Check if betting round is finished:
+        ## All active, non-folded players must have matched current_bet or be all-in
+        all_acted = True
+        for p in self.state.players:
+            if not p.active or p.folded or p.all_in:
+                continue
+            if p.bet != self.state.current_bet:
+                all_acted = False
+                break
+
+        # Check if only one player remains active (others folded)
+        active_players = [p for p in self.state.players if p.active and not p.folded]
+        if len(active_players) == 1:
+            while self.state.betting_round != BettingRound.SHOWDOWN:
+                self.step_round()
+            winner = self.end_round()
+            return winner
+
+        # Update the game state
+        if all_acted:
+            self.step_round()
+            if self.state.betting_round == BettingRound.SHOWDOWN:
+                winner = self.end_round()
+                return winner
+        else:
+            self.state.current_player_idx = self.next_active_player_idx(
+                self.state.current_player_idx
+            )
+
+        return None
 
     def _handle_action(self, agent, action: Action, extra_bet: int = None):
         """
@@ -275,9 +363,9 @@ class PokerEnv(AECEnv):
         Includes error handling for invalid actions.
         """
         assert (
-            agent.idx == self.state.current_player_idx
-        ), f"Player {agent.idx} attempted to take an action when it was not their turn."
-        player = self.state.players[agent.idx]
+            agent == self.state.current_player_idx
+        ), f"Player {agent} attempted to take an action when it was not their turn."
+        player = self.state.players[agent]
         if action is None:
             return True
 
@@ -298,7 +386,7 @@ class PokerEnv(AECEnv):
             player.make_bet(extra_bet)
             self.state.current_bet = player.bet
         else:
-            raise ValueError(f"Invalid action: {action} for player {agent.idx}.")
+            raise ValueError(f"Invalid action: {action} for player {agent}.")
         return True
 
     # Poker Logic
@@ -443,15 +531,24 @@ class PokerEnv(AECEnv):
             self.state.betting_round = BettingRound.FLOP
             self._collect_bets()
             self.state.community_cards += self._draw_for_round(BettingRound.FLOP, cards)
+            self.state.current_player_idx = self.next_active_player_idx(
+                self.state.dealer_idx
+            )
         elif self.state.betting_round == BettingRound.FLOP:
             self.state.betting_round = BettingRound.TURN
             self._collect_bets()
             self.state.community_cards += self._draw_for_round(BettingRound.TURN, cards)
+            self.state.current_player_idx = self.next_active_player_idx(
+                self.state.dealer_idx
+            )
         elif self.state.betting_round == BettingRound.TURN:
             self.state.betting_round = BettingRound.RIVER
             self._collect_bets()
             self.state.community_cards += self._draw_for_round(
                 BettingRound.RIVER, cards
+            )
+            self.state.current_player_idx = self.next_active_player_idx(
+                self.state.dealer_idx
             )
         elif self.state.betting_round == BettingRound.RIVER:
             self._collect_bets()
