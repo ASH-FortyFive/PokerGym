@@ -2,9 +2,9 @@ from dataclasses import dataclass, field
 from typing import Optional
 from pokergym.env.enums import BettingRound
 
-@dataclass(frozen=True)
+@dataclass()
 class PokerConfig:
-    num_players: int = 5
+    num_players: int = 6
     starting_stack: int = 1000
     big_blind: int = 20
     small_blind: int = 10
@@ -13,7 +13,7 @@ class PokerConfig:
     max_rounds: int = 10 
     min_bet: Optional[int] = None # None menas no forced minimum bet
     max_bet: Optional[int] = None # None means no limit
-    min_raise: int = 0
+    min_raise: int = 20
 
     cards_per_round: dict[BettingRound, int] = field(default_factory=lambda: {
         BettingRound.FLOP: 3,

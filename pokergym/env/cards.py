@@ -39,3 +39,16 @@ def card_to_int(card: Card) -> int:
     suit_int = Card.get_suit_int(card) 
     suit_int = (suit_int & -suit_int).bit_length() - 1
     return rank_int + 13*suit_int + 1
+
+def int_to_card(card_int: int) -> Card:
+    """
+    Convert a low dim integer representation to a deuces Card.
+    0 is no card, 1-52 are the cards.
+    1-13 are the ranks of Spades, 14-26 are Hearts,
+    27-39 are Diamonds, and 40-52 are Clubs.
+    """
+    if card_int == 0:
+        return None
+    rank = (card_int - 1) % 13
+    suit = (card_int - 1) // 13
+    return Card.new(f"{Card.int_to_rank(rank)}{Card.int_to_suit(suit)}")    

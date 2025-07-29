@@ -1,5 +1,6 @@
+import functools
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import gymnasium as gym
 import numpy as np
@@ -9,9 +10,10 @@ from pettingzoo import AECEnv
 
 from pokergym.env.cards import WORST_RANK, SeededDeck, card_to_int
 from pokergym.env.config import PokerConfig
+from pokergym.env.custom_spaces import MaskableBox
 from pokergym.env.enums import Action, BettingRound
 from pokergym.env.player import Player
-from pokergym.env.utils import join_player_ids, short_pretty_str
+from pokergym.env.utils import cards_pretty_str, join_player_ids
 from pokergym.visualise.terminal_vis import terminal_render
 
 
@@ -30,7 +32,7 @@ class PokerGameState:
     round_number: int = 0
     deck: SeededDeck = field(default_factory=SeededDeck)
 
-    def reset_for_new_hand(self, seed):
+    def reset_for_new_hand(self):
         """
         Reset the game state for a new hand.
         This includes resetting player states, community cards, pot, and betting round.
@@ -39,7 +41,6 @@ class PokerGameState:
         self.pot = 0
         self.current_bet = 0
         self.betting_round = BettingRound.START
-        self.deck.seed(seed) if seed else None
         self.deck.shuffle()
         for player in self.players:
             player.reset_for_new_hand()
@@ -49,22 +50,24 @@ class PokerGameState:
         Fully reset the game state, including the deck.
         If a seed is provided, it will create a seeded deck for reproducibility.
         """
-        self.reset_for_new_hand(seed)
         self.round_number = 0
         self.dealer_idx = 0
         self.current_player_idx = 0
         self.deck = SeededDeck(seed) if seed is not None else SeededDeck()
+        self.reset_for_new_hand()
 
 
 class PokerEnv(AECEnv):
     metadata = {
         "name": "PokerEnv_v0",
+        "render_modes": ["terminal"],
     }
 
     def __init__(self, config: PokerConfig = PokerConfig(), seed: Optional[int] = None):
         super(PokerEnv, self).__init__()
 
         self.config = config
+        self.seed = seed
 
         # Initialize the game state
         self.state = PokerGameState(
@@ -75,69 +78,126 @@ class PokerEnv(AECEnv):
             active_players=config.num_players,
             dealer_idx=0,
             current_player_idx=0,
-            deck=SeededDeck(seed) if seed is not None else SeededDeck(),
+            deck=SeededDeck(self.seed) if self.seed is not None else SeededDeck(),
         )
+        self.MAX_CHIPS = self.config.starting_stack * self.config.num_players
+
         self.evaluator = Evaluator()
 
-    # AECEnv Attributes
-    @property
-    def agents(self):
-        return [i for i in range(len(self.state.players))]
+        # AECEnv Attributes
+        ## Following https://pettingzoo.farama.org/api/aec/
+        self.possible_agents = list(range(config.num_players))
+        self.observation_spaces = {
+            agent: self.observation_space(agent) for agent in self.possible_agents
+        }
+        self.action_spaces = {
+            agent: self.action_space(agent) for agent in self.possible_agents
+        }
 
-    @property
-    def num_agents(self):
-        return len(self.state.players)
+        self.agents = self.possible_agents.copy()
+        self.terminations = {agent: False for agent in self.possible_agents}
+        self.truncations = {agent: False for agent in self.possible_agents}
+        self.rewards = {agent: 0.0 for agent in self.possible_agents}
+        self._cumulative_rewards = {agent: 0.0 for agent in self.possible_agents}
+        self.infos = {agent: {} for agent in self.possible_agents}
 
-    @property
-    def possible_agents(self):
-        return self.agents
+    def _remove_agent(self, agent):
+        """
+        Remove an agent from the environment.
+        This is used when a player is no longer active (e.g., folded or all-in).
+        """
+        del self.terminations[agent]
+        del self.truncations[agent]
+        del self.rewards[agent]
+        del self._cumulative_rewards[agent]
+        del self.infos[agent]
+        self.agents.remove(agent)
 
-    @property
-    def max_num_agents(self):
-        return self.config.num_players
+
+    # Dynamic AECEnv Attributes
+    # @property
+    # def terminations(self):
+    #     # Returns a dictionary of NEWLY terminated players
+    #     terminations = {player.idx: not player.active for player in self.state.players if not self.terminated[player.idx]}
+    #     self.terminated.update(terminations)
+    #     if all(terminations.values()):
+    #         print()
+    #     return terminations
+
+    # @terminations.setter
+    # def terminations(self, value):
+    #     raise NotImplementedError("Terminations cannot be set directly in PokerEnv.")
+
+    # @property
+    # def truncations(self):
+    #     # Returns a dictionary of NEWLY truncated players
+    #     return {player.idx: False for player in self.state.players}
+
+    # @truncations.setter
+    # def truncations(self, value):
+    #     raise NotImplementedError("Truncations cannot be set directly in PokerEnv.")
+
+    # @property
+    # def rewards(self):
+    #     # TODO: Implement a proper reward system
+    #     return {player.idx: 0.0 for player in self.state.players if player.active}
+
+    # @rewards.setter
+    # def rewards(self, value):
+    #     raise NotImplementedError("Rewards cannot be set directly in PokerEnv.")
+
+    # @property
+    # def _cumulative_rewards(self):
+    #     return {player.idx: 0.0 for player in self.state.players}
+
+    # @_cumulative_rewards.setter
+    # def _cumulative_rewards(self, value):
+    #     raise NotImplementedError(
+    #         "Cumulative rewards cannot be set directly in PokerEnv."
+    #     )
+
+    # @property
+    # def infos(self):
+    #     return {player.idx: {} for player in self.state.players}
+
+    # @infos.setter
+    # def infos(self, value):
+    #     raise NotImplementedError("Infos cannot be set directly in PokerEnv.")
 
     @property
     def agent_selection(self):
+        """Return the index of the current agent."""
         return self.state.current_player_idx
 
-    @property
-    def terminations(self):
-        return {player.idx: not player.active for player in self.state.players}
-
-    @property
-    def truncations(self):
-        return {agent: False for agent in self.agents}
-
-    @property
-    def rewards(self):
-        return {agent: 0 for agent in self.agents}
-
-    @property
-    def observation_spaces(self):
-        # All agents are identical in terms of observation space
-        return {agent: self.observation_space() for agent in self.agents}
-
-    @property
-    def action_spaces(self):
-        # All agents are identical in terms of action space
-        return {agent: self.action_space() for agent in self.agents}
+    @agent_selection.setter
+    def agent_selection(self, value):
+        raise NotImplementedError("Agent selection cannot be set directly in PokerEnv.")
 
     # Gymnasium Environment Methods
-    def reset(self, seed: Optional[int] = None, **kwargs):
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """
         Reset the environment to the initial state.
         """
-        self.state.reset(seed)
+        self.seed = seed
+        self.state.reset(self.seed)
+        self.start_round(cards=options.get("cards") if options else None)
         return self.state, {}
 
-    def action_space(self):
+    @functools.lru_cache(maxsize=None)
+    def action_space(self, agent=None):
         """
         Get the space of all possible actions for the agent.
         """
+        seed = self.seed + agent if self.seed is not None else None
+        # print(f"Creating action space for agent {agent} with seed {seed}")
         return Dict(
             {
-                "action": Discrete(len(Action)),  # Action space for the agent
-                "raise_amount": Box(low=0.0, high=1.0, shape=()),  # Amount to raise
+                "action": Discrete(
+                    len(Action), seed=seed
+                ),  # Action space for the agent
+                "raise_amount": MaskableBox(
+                    low=0.0, high=1.0, shape=(), seed=seed
+                ),  # Amount to raise
             }
         )
 
@@ -145,56 +205,83 @@ class PokerEnv(AECEnv):
         """
         Mask actions based on the current game state.
         """
-        max_chips = (
-            self.config.starting_stack * self.config.num_players + 1
-        )  # +1 to allow for no bet (0)
         player = self.state.players[agent]
-        mask = [0] * len(Action)  # Initialize all actions as invalid
+        mask = [False] * len(Action)  # Initialize all actions as invalid
         min_raise = 0.0
         max_raise = 0.0
 
-        if player.folded or not player.active:
-            # If the player is folded or inactive, only allow PASS
+        # Check if player can "pass", an action that allows "skipping" their turn
+        players_in_hand = [
+            p for p in self.state.players if p.active and not p.folded and not p.all_in
+        ]
+        if (
+            player.folded
+            or not player.active
+            or player.all_in
+            or (len(players_in_hand) == 1 and player.bet == self.state.current_bet)
+        ):
+            mask[Action.PASS.value] = True  # Allow PASS action
+            # If the player is folded, inactive, or all-in we only allow PASS
             return {
-                "action_mask": np.array(mask, dtype=np.int8),
-                "min_raise": min_raise,
-                "max_raise": max_raise,
+                "action_mask": {
+                    "action": np.array(mask, dtype=np.int8),
+                    "raise_amount": np.array([min_raise, max_raise], dtype=np.float32),
+                }
             }
 
-        mask[Action.FOLD.value] = 1  # Always allow folding
+        mask[Action.FOLD.value] = True  # Always allow folding
 
-        # Player's bet matches the current bet. They can CHECK or RAISE.
+        # Player's bet matches the current bet. They can CHECK.
         if player.bet == self.state.current_bet:
-            mask[Action.CHECK.value] = 1
-            # Check if they have enough chips to make a minimum raise.
-            if player.chips >= self.config.min_raise:
-                mask[Action.RAISE.value] = 1
-                min_raise = self.config.min_raise / max_chips
-                max_raise = player.chips / max_chips
-        # Player's bet is less than the current bet. They can CALL or RAISE.
+            mask[Action.CHECK.value] = True
+        # Player's bet is less than the current bet. They can CALL or .
         elif player.bet < self.state.current_bet:
             # Player can call (or go all-in) if they have any chips left.
             if player.chips > 0:
-                mask[Action.CALL.value] = 1
-
-            # To raise, they must be able to at least match the call amount plus a minimum raise.
-            # An all-in raise for less than a min-raise is also possible if they have more than `to_call`.
-            to_raise = self.state.current_bet - player.bet + self.config.min_raise
-            if player.chips >= to_raise:
-                mask[Action.RAISE.value] = 1
-                min_raise = to_raise / max_chips
-                max_raise = player.chips / max_chips
+                mask[Action.CALL.value] = True
         else:
             # This case should not happen in a valid game state.
             raise ValueError("Player bet exceeds current bet, inconsistent state.")
 
+        # To raise, they must be able to at least match the call amount plus a minimum raise.
+        ## An all-in raise for less than a min-raise is also possible
+        to_raise = self.state.current_bet - player.bet + self.config.min_raise
+        if player.chips >= to_raise:
+            other_max = max(
+                [
+                    p.bet + p.chips
+                    for p in self.state.players
+                    if p.active and not p.folded and p.idx != player.idx
+                ]
+            )
+            if other_max != 0:
+                # If all other players are all-in or have no chips, there is no raise possible
+                mask[Action.RAISE.value] = True
+                min_raise = to_raise
+                max_raise = player.chips
+
+                min_raise = min(
+                    min_raise, other_max
+                )  # Limit raise to the maximum of all other players' chips
+                max_raise = min(
+                    max_raise, other_max
+                )  # Limit raise to the minimum of all other players' chips
+
+        # if np.allclose([min_raise],[max_raise]):
+        #     print(f"Warning: min_raise ({min_raise}) and max_raise ({max_raise}) are equal for player {agent}. This may indicate an issue with the action mask logic.")
+
+        min_raise /= self.MAX_CHIPS
+        max_raise /= self.MAX_CHIPS
+
         return {
-            "action_mask": np.array(mask, dtype=np.int8),
-            "min_raise": min_raise,
-            "max_raise": max_raise,
+            "action_mask": {
+                "action": np.array(mask, dtype=np.int8),
+                "raise_amount": np.array([min_raise, max_raise], dtype=np.float32),
+            }
         }
 
-    def observation_space(self):
+    @functools.lru_cache(maxsize=None)
+    def observation_space(self, agent=None):
         N = self.config.num_players
         return Dict(
             {
@@ -216,14 +303,17 @@ class PokerEnv(AECEnv):
                 "folded": MultiBinary(N),
                 "all_in": MultiBinary(N),
                 "active": MultiBinary(N),
-                "relative_dealer_position": Box(low=0.0, high=1.0, shape=(1,)),
+                "relative_dealer_position": Box(low=0.0, high=1.0, shape=()),
                 ## Meta Observations
                 "betting_round": Discrete(len(BettingRound)),
                 "round_number": Box(low=0.0, high=1.0, shape=()),
                 # Action Masks
-                "action_mask": MultiBinary(len(Action)),  # 0 or 1 for each action
-                "min_raise": Box(low=0.0, high=1.0, shape=()),
-                "max_raise": Box(low=0.0, high=1.0, shape=()),
+                "action_mask": Dict(
+                    {
+                        "action": MultiBinary(len(Action)),  # 0 or 1 for each action
+                        "raise_amount": Box(low=0.0, high=1.0, shape=(2,)),
+                    }
+                ),
             }
         )
 
@@ -246,13 +336,14 @@ class PokerEnv(AECEnv):
         ]
         for key in relative_obs:
             obs[key] = self._rotate_to_idx(obs[key], agent)
-        obs["relative_dealer_position"] = np.array(
-            [
-                (self.state.dealer_idx - agent)
-                % self.config.num_players
-                / self.config.num_players
-            ]
-        )
+        # obs["relative_dealer_position"] = np.array(
+        #     [
+        #         (self.state.dealer_idx - agent)
+        #         % self.config.num_players
+        #         / self.config.num_players
+        #     ]
+        # )
+        obs["relative_dealer_position"] = float((self.state.dealer_idx - agent) % self.config.num_players / self.config.num_players)
         return obs
 
     def _get_global_obs(self):
@@ -260,20 +351,25 @@ class PokerEnv(AECEnv):
         Get the observation visible to all agents.
         This includes the community cards, pot, current bet, and betting round.
         """
-        max_chips = (
-            self.config.starting_stack * self.config.num_players + 1
-        )  # +1 to allow for no bet (0)
         obs = {
             "community_cards": [
-                card_to_int(card) for card in self.state.community_cards
+                (
+                    card_to_int(self.state.community_cards[i])
+                    if i < len(self.state.community_cards)
+                    else 0
+                )
+                for i in range(self.config.max_community_cards)
             ],
-            "pot": self.state.pot / max_chips,
-            "current_bet": self.state.current_bet / max_chips,
-            "betting_round": self.state.betting_round,
-            "chip_counts": [player.chips / max_chips for player in self.state.players],
-            "bets": [player.bet / max_chips for player in self.state.players],
+            "pot": self.state.pot / self.MAX_CHIPS,
+            "current_bet": self.state.current_bet / self.MAX_CHIPS,
+            "betting_round": self.state.betting_round.value,
+            "chip_counts": [
+                player.chips / self.MAX_CHIPS for player in self.state.players
+            ],
+            "bets": [player.bet / self.MAX_CHIPS for player in self.state.players],
             "total_contribution": [
-                player.total_contribution / max_chips for player in self.state.players
+                player.total_contribution / self.MAX_CHIPS
+                for player in self.state.players
             ],
             "folded": [player.folded for player in self.state.players],
             "all_in": [player.all_in for player in self.state.players],
@@ -309,6 +405,12 @@ class PokerEnv(AECEnv):
         Input:
         - action: A dictionary containing the "action" and optional "raise_amount".
         """
+        for agent in self.agents:
+            if self.terminations[agent]:
+                self._remove_agent(agent)
+                if agent == self.state.current_player_idx:
+                    return
+
         # Take the Action
         player = self.state.players[self.state.current_player_idx]
 
@@ -318,45 +420,55 @@ class PokerEnv(AECEnv):
             assert (
                 "raise_amount" in action is not None
             ), "Raise requires an raise_amount amount."
-            max_chips = self.config.starting_stack * self.config.num_players + 1
-            extra_bet_chips = int(action["raise_amount"] * max_chips)
 
         # Apply the action
-        self._handle_action(player.idx, action["action"], extra_bet_chips)
-        player.last_action = action
+        self._handle_action(player.idx, action)
+        player.last_action = Action(action["action"])
 
         # Check if betting round is finished:
         ## All active, non-folded players must have matched current_bet or be all-in
         all_acted = True
         for p in self.state.players:
-            if not p.active or p.folded or p.all_in:
+            if not p.active or p.folded:
                 continue
-            if p.bet != self.state.current_bet:
+            if p.last_action is None:
+                all_acted = False
+                break
+            # End the round if everyone but the next player has no raised
+            if p.last_action is Action.RAISE and p.idx != self.next_active_player_idx(
+                self.state.current_player_idx
+            ):
                 all_acted = False
                 break
 
         # Check if only one player remains active (others folded)
-        active_players = [p for p in self.state.players if p.active and not p.folded]
-        if len(active_players) == 1:
+        player_in_hand = [p for p in self.state.players if p.active and not p.folded]
+        if len(player_in_hand) == 1:
+            # Only one player remains, so skip to showdown
             while self.state.betting_round != BettingRound.SHOWDOWN:
                 self.step_round()
-            winner = self.end_round()
-            return winner
-
-        # Update the game state
-        if all_acted:
+        elif all_acted:
             self.step_round()
-            if self.state.betting_round == BettingRound.SHOWDOWN:
-                winner = self.end_round()
-                return winner
         else:
+            # If not all players have acted, move to the next player
+            ## Redundant if we enter showdown, but cleaner this way
             self.state.current_player_idx = self.next_active_player_idx(
                 self.state.current_player_idx
             )
 
-        return None
+        if self.state.betting_round == BettingRound.SHOWDOWN:
+            self.end_round()
+            if self.state.betting_round == BettingRound.END:
+                for player in self.state.players:
+                    if player.active:
+                        player.active = False  # Mark all players as inactive
+                        self.terminations[player.idx] = True
+            else:
+                self.start_round()
 
-    def _handle_action(self, agent, action: Action, extra_bet: int = None):
+        return
+
+    def _handle_action(self, agent, action: dict[str, Union[Action, float]]):
         """
         Apply the action taken by the agent to the game state.
         Allows for all actions defined in the Action enum.
@@ -366,25 +478,43 @@ class PokerEnv(AECEnv):
             agent == self.state.current_player_idx
         ), f"Player {agent} attempted to take an action when it was not their turn."
         player = self.state.players[agent]
-        if action is None:
+        action_enum = Action(action["action"])
+        extra_bet = action.get("raise_amount", 0.0)
+
+        if action_enum is None:
             return True
 
-        if action is Action.FOLD:
+        if action_enum is Action.FOLD:
             player.folded = True
-        elif action is Action.CHECK:
+        elif action_enum is Action.CHECK:
             assert (
                 player.bet == self.state.current_bet
             ), "Player can only check if their bet matches the current bet."
-        elif action is Action.CALL:
+        elif action_enum is Action.CALL:
             assert player.chips > 0, "Player cannot call with no chips."
             to_call = min(self.state.current_bet - player.bet, player.chips)
             player.make_bet(to_call)
-        elif action is Action.RAISE:
+        elif action_enum is Action.RAISE:
+            # Convert normalized raise amount to absolute chips
+            extra_chips = round(
+                extra_bet * self.MAX_CHIPS
+            )  # Shold we enforce rounding?
+            other_max = max(
+                [
+                    p.bet + p.chips
+                    for p in self.state.players
+                    if p.active and not p.folded and p.idx != player.idx
+                ]
+            )
+            min_bet = self.state.current_bet + self.config.min_raise
+            min_bet = min(min_bet, other_max)
             assert (
-                player.bet + extra_bet >= self.state.current_bet + self.config.min_raise
+                player.bet + extra_chips >= min_bet
             ), "Player must raise at least the minimum raise amount."
-            player.make_bet(extra_bet)
+            player.make_bet(extra_chips)
             self.state.current_bet = player.bet
+        elif action_enum is Action.PASS:
+            pass
         else:
             raise ValueError(f"Invalid action: {action} for player {agent}.")
         return True
@@ -399,8 +529,7 @@ class PokerEnv(AECEnv):
             self.state.betting_round == BettingRound.START
         ), "Cannot start a new round before ending the current one."
         # Reset the game state for a new round
-        self.state.reset_for_new_hand(seed=None)
-        self.state.deck.shuffle()
+        self.state.reset_for_new_hand()
         for player in self.state.players:
             player.reset_for_new_hand()
 
@@ -462,6 +591,8 @@ class PokerEnv(AECEnv):
                 for player in self.state.players
             ]
         )
+        # player_in_hand = [p for p in self.state.players if p.active and not p.folded]
+        winners = set()
         pots = self._construct_pots()
         for pot_amount, player_indices in pots:
             # Determine the winners for this pot
@@ -474,6 +605,7 @@ class PokerEnv(AECEnv):
             split_amount = pot_amount // len(pot_winners)
             for winner in pot_winners:
                 winner.give_chips(split_amount)
+                winners.add(winner.idx)
                 self.state.pot -= split_amount
                 print(
                     f"Player {winner.idx} wins {split_amount} chips from the pot of {pot_amount}."
@@ -500,24 +632,31 @@ class PokerEnv(AECEnv):
         # Remove Players who are out of chips
         active_count = self.config.num_players
         for player in self.state.players:
-            if player.chips == 0:
+            if player.chips == 0 and player.active:
                 player.active = False
+                self.terminations[player.idx] = True
+                active_count -= 1
+            elif not player.active:
                 active_count -= 1
         self.state.active_players = active_count
 
         # Update Game State
-        winner = None
         if active_count == 0:
             raise ValueError("All players are out of chips. Cannot continue the game.")
         elif active_count == 1:
-            winner = next(player for player in self.state.players if player.active)
+            winners.add(
+                next(player.idx for player in self.state.players if player.active)
+            )
+            winner = self.state.players[winners.pop()]
+            self.terminations[winner.idx] = True
+            winner.active = False
             self.state.betting_round = BettingRound.END
         else:
             self.state.betting_round = BettingRound.START
             self.state.round_number += 1
             self.state.dealer_idx = self.next_active_player_idx(self.state.dealer_idx)
 
-        return winner
+        return winners
 
     def step_round(self, cards: Optional[dict[BettingRound, List[Card]]] = None):
         """
@@ -530,28 +669,32 @@ class PokerEnv(AECEnv):
         if self.state.betting_round == BettingRound.PREFLOP:
             self.state.betting_round = BettingRound.FLOP
             self._collect_bets()
+            self._clear_actions()
             self.state.community_cards += self._draw_for_round(BettingRound.FLOP, cards)
-            self.state.current_player_idx = self.next_active_player_idx(
+            self.state.current_player_idx = self.nearest_active_player_idx(
                 self.state.dealer_idx
             )
         elif self.state.betting_round == BettingRound.FLOP:
             self.state.betting_round = BettingRound.TURN
             self._collect_bets()
+            self._clear_actions()
             self.state.community_cards += self._draw_for_round(BettingRound.TURN, cards)
-            self.state.current_player_idx = self.next_active_player_idx(
+            self.state.current_player_idx = self.nearest_active_player_idx(
                 self.state.dealer_idx
             )
         elif self.state.betting_round == BettingRound.TURN:
             self.state.betting_round = BettingRound.RIVER
             self._collect_bets()
+            self._clear_actions()
             self.state.community_cards += self._draw_for_round(
                 BettingRound.RIVER, cards
             )
-            self.state.current_player_idx = self.next_active_player_idx(
+            self.state.current_player_idx = self.nearest_active_player_idx(
                 self.state.dealer_idx
             )
         elif self.state.betting_round == BettingRound.RIVER:
             self._collect_bets()
+            self._clear_actions()
             self.state.betting_round = BettingRound.SHOWDOWN
 
     def _collect_bets(self):
@@ -569,6 +712,14 @@ class PokerEnv(AECEnv):
             self.state.pot += amount
             player.bet = 0
         self.state.current_bet = 0
+
+    def _clear_actions(self):
+        """
+        Clear the actions of all players at the end of a betting round.
+        This is called to reset the state for the next betting round.
+        """
+        for player in self.state.players:
+            player.last_action = None
 
     def _draw_for_round(self, round: BettingRound, cards: Optional[List[Card]] = None):
         """
@@ -598,11 +749,28 @@ class PokerEnv(AECEnv):
         return drawn
 
     # Utility Methods
+    def _find_active_player(
+        self, start_idx: int, direction: int, include_start: bool
+    ) -> int:
+        """
+        Finds an active and non-folded player starting from `start_idx`, moving in `direction` (+1 or -1).
+        If `include_start` is True, considers `start_idx` as the first valid candidate.
+        """
+        num_players = self.config.num_players
+        offsets = range(num_players) if include_start else range(1, num_players + 1)
+
+        for offset in offsets:
+            idx = (start_idx + direction * offset) % num_players
+            player = self.state.players[idx]
+            if player.active and not player.folded:
+                return idx
+        raise ValueError("No active and non-folded player found.")
+
     def next_active_player_idx(self, idx):
-        idx = (idx + 1) % self.config.num_players
-        while not self.state.players[idx].active:
-            idx = (idx + 1) % self.config.num_players
-        return idx
+        return self._find_active_player(idx, 1, include_start=False)
+
+    def nearest_active_player_idx(self, idx):
+        return self._find_active_player(idx, 1, include_start=True)
 
     def render(self):
         if self.render_mode == "terminal":
@@ -612,6 +780,7 @@ class PokerEnv(AECEnv):
         """
         Construct pots based on player contributions (tracked by player.total_contribution).
         Returns a list of tuples, where each tuple contains the pot amount and a list of player indices who contributed to that pot.
+        TODO: Handle edge cases like players going all-in and uneven contributions.
         """
         contributions = [
             (i, p.total_contribution, p.active and not p.folded)

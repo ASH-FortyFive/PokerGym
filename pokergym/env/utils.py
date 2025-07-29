@@ -1,4 +1,7 @@
+from typing import Dict
 from deuces import Card
+from pokergym.env.enums import Action, BettingRound
+
 
 def join_player_ids(players):
     ids = [str(p.idx) for p in players]
@@ -12,5 +15,33 @@ def join_player_ids(players):
         return ", ".join(ids[:-1]) + ", and " + ids[-1]
     
 
-def short_pretty_str(cards):
+def cards_pretty_str(cards):
     return ''.join([Card.int_to_pretty_str(card).replace(' ','') for card in cards])
+
+def action_pretty_str(action_dict: Dict, max_chips:int = None) -> str:
+    if action_dict is None:
+        return "None"
+    action = Action(action_dict["action"])
+    if action == Action.RAISE:
+        raise_amount = float(action_dict["raise_amount"])
+        if max_chips is not None:
+            raise_amount = round(raise_amount * max_chips)
+        else:
+            raise_amount = float(raise_amount)
+        string = f"{action.name} {raise_amount:.2f}"
+    else:
+        string = action.name
+    return string
+
+
+def action_mask_pretty_str(action_mask_dict: Dict, max_chips:int = None) -> str:
+    actions = [Action(i) for i, available in enumerate(action_mask_dict["action"]) if available]
+    # masked_actions = [Action(i) for i, available in enumerate(action_mask_dict["action"]) if not available]
+    raise_mask = action_mask_dict["raise_amount"]
+    if max_chips:
+        raise_mask = [round(r * max_chips) for r in raise_mask]
+    else:
+        raise_mask = [float(r) for r in raise_mask]
+    string = f"Available actions: {', '.join([a.name for a in actions])}, betting ranges from {raise_mask[0]} to {raise_mask[1]}"
+    return string
+    
