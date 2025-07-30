@@ -1,7 +1,7 @@
 # PokerGym
 
 A poker simulation and reinforcement learning environment.
-Users Gymnasium (formerly OpenAI gym) to create a poker environment for training agents.
+Uses [Gymnasium](https://gymnasium.farama.org/) (formerly OpenAI gym) and [PettingZoo](https://pettingzoo.farama.org/) API to create a poker environment for training agents.
 
 Following poker rules from [Poker Tournament Directors Association](https://www.pokertda.com/poker-tda-rules/).
 
@@ -14,16 +14,17 @@ TODO
 
 ## Current Status
 
-### Features
-- None
+<!-- ### Features
+- None -->
 
 ### Goals
 | Task | Status |
 |------|--------|
 | Set-up Project | ✔ |
-| Basic Poker Environment |  |
-| Basic Poker Agent |  |
-| Random Poker Agent |  |
+| Basic Poker Environment | ✔ |
+| Deal with side-pots | ✔ |
+| Basic Poker Agent | ✔ |
+| Random Poker Agent | ✔ |
 | Reinforcement Learning Poker Agent |  |
 | Test Cases |  |
-| Deal with side-pots |  |
+| Generated Standarized Game Log outputs |  |
