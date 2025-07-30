@@ -127,7 +127,10 @@ class PokerEnv(AECEnv):
             self.agents
         )  # Start with a fixed agent for testing
 
-        self.start_round(cards=options.get("cards") if options else None)
+        print(options, type(options))
+        self._cards = options.get("cards", {}) if options else {}
+        self.start_round()
+
         return self.game_state, {}
 
     def close(self):
@@ -478,7 +481,7 @@ class PokerEnv(AECEnv):
         return True
 
     # Poker Logic
-    def start_round(self, cards: Optional[dict[int, List[Card]]] = None):
+    def start_round(self):
         """
         Start a new round of poker, dealing cards and setting blinds.
         - If `cards` is provided (dict of player index and list of cards), it will use those cards instead of drawing from the deck.
@@ -493,12 +496,16 @@ class PokerEnv(AECEnv):
 
         # Deal initial cards
         ## If cards are provided, use those cards for the players
+        cards_for_round = self._cards.get(self.game_state.round_number)
+        cards = cards_for_round.get(BettingRound.START) if cards_for_round else None
         if cards:
             for i, _cards in cards.items():
                 if len(_cards) != self.config.max_hand_cards:
                     raise ValueError(
                         f"Player {i} must receive exactly {self.config.max_hand_cards} cards."
                     )
+                if i >= self.config.num_players:
+                    continue
                 p = self.game_state.players[i]
                 if not p.idx in self.agents:
                     continue
@@ -638,9 +645,7 @@ class PokerEnv(AECEnv):
             self.game_state.betting_round = BettingRound.FLOP
             self._collect_bets()
             self._clear_actions()
-            self.game_state.community_cards += self._draw_for_round(
-                BettingRound.FLOP, cards
-            )
+            self.game_state.community_cards += self._draw_for_round(BettingRound.FLOP)
             self.game_state.current_idx = self.nearest_active_player_idx(
                 self.game_state.dealer_idx
             )
@@ -648,9 +653,7 @@ class PokerEnv(AECEnv):
             self.game_state.betting_round = BettingRound.TURN
             self._collect_bets()
             self._clear_actions()
-            self.game_state.community_cards += self._draw_for_round(
-                BettingRound.TURN, cards
-            )
+            self.game_state.community_cards += self._draw_for_round(BettingRound.TURN)
             self.game_state.current_idx = self.nearest_active_player_idx(
                 self.game_state.dealer_idx
             )
@@ -658,9 +661,7 @@ class PokerEnv(AECEnv):
             self.game_state.betting_round = BettingRound.RIVER
             self._collect_bets()
             self._clear_actions()
-            self.game_state.community_cards += self._draw_for_round(
-                BettingRound.RIVER, cards
-            )
+            self.game_state.community_cards += self._draw_for_round(BettingRound.RIVER)
             self.game_state.current_idx = self.nearest_active_player_idx(
                 self.game_state.dealer_idx
             )
@@ -699,29 +700,37 @@ class PokerEnv(AECEnv):
         for p in self.game_state.players:
             p.last_action = None
 
-    def _draw_for_round(self, round: BettingRound, cards: Optional[List[Card]] = None):
+    def _draw_for_round(self, betting_round: BettingRound):
         """
         Draw cards for the specified betting round.
         - If `cards` is provided, it will use those cards instead of drawing from the deck.
         """
-        if round not in self.config.cards_per_round:
-            raise ValueError(f"Invalid betting round: {round}")
+        if betting_round not in self.config.cards_per_round:
+            raise ValueError(f"Invalid betting round: {betting_round}")
 
         # Draw predetermined cards if provided
         drawn = []
+        burn = None
+        cards_for_round = self._cards.get(self.game_state.round_number)
+        cards = cards_for_round.get(betting_round) if cards_for_round else None
         if cards:
-            cards_round = cards.get(round, [])
-            if len(cards_round) > self.config.cards_per_round[round]:
+            if len(cards) > self.config.cards_per_round[betting_round] + 1:
                 raise ValueError(
-                    f"Expected at most {self.config.cards_per_round[round]} cards for {round}, got {len(cards)}."
+                    f"Expected at most {self.config.cards_per_round[betting_round]} cards for {betting_round}, got {len(cards)}."
                 )
-            for card in cards_round:
+            for card in cards:
+                if burn is None:
+                    self.game_state.deck.cards.remove(card)
+                    burn = card
+                    continue
                 self.game_state.deck.cards.remove(card)
                 drawn.append(card)
 
         # Draw from the deck if no / not enough cards were provided
-        if len(drawn) < self.config.cards_per_round[round]:
-            remaining = self.config.cards_per_round[round] - len(drawn)
+        if burn is None:
+            burn = self.game_state.deck.draw(1)
+        if len(drawn) < self.config.cards_per_round[betting_round]:
+            remaining = self.config.cards_per_round[betting_round] - len(drawn)
             for _ in range(remaining):
                 drawn.append(self.game_state.deck.draw())
         return drawn

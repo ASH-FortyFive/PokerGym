@@ -11,7 +11,7 @@ class Agent(ABC):
         self.observation_space = observation_space
 
     @abstractmethod
-    def act(self, observation) -> Union[Action, Any]:
+    def act(self, observation, action_mask) -> Union[Action, Any]:
         """
         Implement the agent's action logic here.
         This is a placeholder method and should be overridden by subclasses.
