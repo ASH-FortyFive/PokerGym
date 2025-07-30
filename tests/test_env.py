@@ -31,11 +31,9 @@ def test_agent(config, seed=0):
     np.random.seed(seed=seed)
 
     env.reset(seed)
-    env.render()
     for agent in env.agent_iter():
+        env.render()
         observation, reward, termination, truncation, info = env.last()
-        print(env.terminations)
-        print(env.agents)
         action_mask = observation["action_mask"]
         if termination or truncation:
             action = None
@@ -43,11 +41,12 @@ def test_agent(config, seed=0):
             # this is where you would insert your policy
             action = env.action_space(agent).sample(mask=action_mask)
         # print(f"Player {agent}, Round {env.state.round_number} ({env.state.betting_round.name}), action: {action_pretty_str(action, max_chips=env.MAX_CHIPS)}, action mask: {action_mask_pretty_str(action_mask, max_chips=env.MAX_CHIPS)}")
-        # print(
-            # f"Player {agent}, action: {action_pretty_str(action, max_chips=env.MAX_CHIPS)}"
-        # )
+        if Action(action["action"]) == Action.FOLD and agent == 0   :
+            pass
+        print(
+            f"Player {agent}, action: {action_pretty_str(action, max_chips=env.MAX_CHIPS)}"
+        )
         env.step(action)
-        env.render()
     env.close()
 
     print("Game Over!")
@@ -61,7 +60,6 @@ if __name__ == "__main__":
 
     # Use tyro to parse command line arguments
     args = tyro.cli(ExtraArgs)
-    args.config.max_rounds = 1
 
     # Example usage:
     # python -m pokergym.enviroment.poker_env --num_players 5 --starting_stack 1000 --big_blind 100 --small_blind 50 --max_rounds 10000

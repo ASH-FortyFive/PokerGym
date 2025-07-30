@@ -2,13 +2,13 @@ from enum import Enum, auto
 
 
 class BettingRound(Enum):
-    START = auto() # Invalid state, such as before the game starts
-    PREFLOP = auto()
-    FLOP = auto()
-    TURN = auto()
-    RIVER = auto()
-    SHOWDOWN = auto()
-    END = auto()  # Represents the end of the game or round
+    START = 0
+    PREFLOP = 1
+    FLOP = 2
+    TURN = 3
+    RIVER = 4
+    SHOWDOWN = 5
+    END = 6
 
 class Action(Enum):
     FOLD = 0

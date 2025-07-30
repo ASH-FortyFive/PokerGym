@@ -1,3 +1,4 @@
+from typing import List
 from pokergym.env.utils import cards_pretty_str, join_player_ids
 from pokergym.env.cards import WORST_RANK
 from rich.console import Console
@@ -6,12 +7,10 @@ from deuces import evaluator
 
 
 
-def terminal_render(state: "PokerGameState", eval:evaluator=None):
-    console = Console()
-    if evaluator is None:
-        eval = evaluator()
-    # header = f"{'ID':^3} | {'Curr':^4} |{'In':^4} | {'Pos':^3} | {'Chips':^6} | {'Hand':^8} | {'Bet':^6} | {'Total':^6} | {'F':^1} | {'All':^3} | {'Action':>6} | {'Score':^5} | {'%':^6} | {'Hand':^20}"
-
+def terminal_render(env: "PokerEnv"):
+    state = env.game_state
+    agents = env.agents
+    eval = env.evaluator
     items = {
         "ID": (3, "^"),
         "Out": (3, "^"),
@@ -27,92 +26,89 @@ def terminal_render(state: "PokerGameState", eval:evaluator=None):
         "Hand": (20, "<")
     }
     header = " | ".join([f"{item:^{width}}" for item, (width, _) in items.items()])
-
-    # header = f"{'ID':^3} |{'In':^4} | {'Chips':^6} | {'Pos':^3} | {'Cards':^8} | {'Bet':^6} | {'Total':^6} | {'F':^1} | {'All':^3} | {'Action':>6} | {'Score':^5} | {'Hand':^20}"
-    # print("=" * len(header))
-    print(f"Round: {state.round_number}, Betting: {state.betting_round.name}, Pot: {state.pot}")
+    print(f"Round: {state.round_number}, Betting: {state.betting_round.name}, Pot: {state.pot}, Player: {state.current_idx}")
     print(f"Community Cards: {cards_pretty_str(state.community_cards)}")
     print(header)
     print("-" * len(header))
 
     scores = []
     folded = []
-    for player in state.players:
-        folded.append(player.folded)
-        if len(state.community_cards + player.hand) >= 5 and len(state.community_cards + player.hand) <= 7:
-            hand_score = eval.evaluate(player.hand, state.community_cards)
+    for p in state.players:
+        folded.append(p.folded)
+        if len(state.community_cards + p.hand) >= 5 and len(state.community_cards + p.hand) <= 7:
+            hand_score = eval.evaluate(p.hand, state.community_cards)
         else:
             hand_score = WORST_RANK
         scores.append(hand_score)
     best_score = min(scores)
 
-    for player in state.players:
+    for p in state.players:
         # Calculations per player
 
         line = ""
         for item, (width,align) in items.items():
             if item == "ID":
-                id = f"{player.idx:{align}{width}}"
-                if player.idx == state.current_player_idx:
+                id = f"{p.idx:{align}{width}}"
+                if p.idx == env.agent_selection:
                     line += make_green(id)
-                elif not player.active:
+                elif not p.idx in agents:
                     line += make_red(id)
                 else:
                     line += id
             elif item == "Out":
-                if not player.active or player.folded or player.all_in:
+                if not p.idx in agents or p.folded or p.all_in:
                     check = make_red(f"{'✓':{align}{width}}")
                 else:
                     check = f"{'✕':{align}{width}}"
                 line += check
             elif item == "Chips":
-                line += f"{player.chips:{align}{width}}"
+                line += f"{p.chips:{align}{width}}"
             elif item == "Pos":
-                if player.idx == state.sb_idx:
+                if p.idx == state.sb_idx:
                     line += f"{'SB':^{width}}"
-                elif player.idx == state.bb_idx:
+                elif p.idx == state.bb_idx:
                     line += f"{'BB':^{width}}"
                 else:
                     line += f"{'':^{width}}"
             elif item == "Cards":
-                line += f"{cards_pretty_str(player.hand):^{width}}"
+                line += f"{cards_pretty_str(p.hand):^{width}}"
             elif item == "Bet":
-                line += f"{player.bet:{align}{width}}"
+                line += f"{p.bet:{align}{width}}"
             elif item == "Contrib":
-                line += f"{player.total_contribution:{align}{width}}"
+                line += f"{p.total_contribution:{align}{width}}"
             elif item == "F":
-                if player.folded:
+                if p.folded:
                     check = make_red(f"{'✓':{align}{width}}")
                 else:
                     check = f"{'✕':{align}{width}}"
                 line += check
             elif item == "All":
-                if player.all_in:
+                if p.all_in:
                     check = make_red(f"{'✓':{align}{width}}")
                 else:
                     check = f"{'✕':{align}{width}}"
                 line += check
             elif item == "Action":
-                if player.last_action is not None:
-                    line += f"{player.last_action.name:{align}{width}}"
+                if p.last_action is not None:
+                    line += f"{p.last_action.name:{align}{width}}"
                 else:
                     line += f"{'':{align}{width}}"
             elif item == "Score":
-                if scores[player.idx] == WORST_RANK:
+                if scores[p.idx] == WORST_RANK:
                     score = "N/A"
                 else:
-                    score = f"{scores[player.idx]}"
+                    score = f"{scores[p.idx]}"
                 score = f"{score:{align}{width}}"
-                if scores[player.idx] == best_non_folded(scores, folded):
+                if scores[p.idx] == best_non_folded(scores, folded):
                     score = make_green(score)
                 line += score
             elif item == "Hand":
-                if scores[player.idx] == WORST_RANK:
+                if scores[p.idx] == WORST_RANK:
                     hand = "N/A"
                 else:
-                    hand = eval.class_to_string(eval.get_rank_class(scores[player.idx]))
+                    hand = eval.class_to_string(eval.get_rank_class(scores[p.idx]))
                 hand = f"{hand:{align}{width}}"
-                if scores[player.idx] == best_non_folded(scores, folded):
+                if scores[p.idx] == best_non_folded(scores, folded):
                     hand = make_green(hand)
                 line += hand
             # If not last, add separator
