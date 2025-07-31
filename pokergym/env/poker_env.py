@@ -318,7 +318,7 @@ class PokerEnv(AECEnv):
         # To raise, they must be able to at least match the call amount plus a minimum raise.
         ## An all-in raise for less than a min-raise is also possible
         to_raise = self.game_state.current_bet - player.bet + self.config.min_raise
-        if player.chips >= to_raise and player.last_action != Action.RAISE:
+        if player.chips >= to_raise:
             other_max = max(
                 [
                     p.bet + p.chips

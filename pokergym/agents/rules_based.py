@@ -20,7 +20,7 @@ class FoldAgent(Agent):
         mask = action_mask["action"]
         action = {
             "action": Action.PASS,
-            "raise_amount": [0, 0]  # No raise amount since we are folding
+            "raise_amount": [0]  # No raise amount since we are folding
         }
         if mask[Action.PASS.value]: # Must pass
             pass
@@ -46,7 +46,7 @@ class CheckAgent(Agent):
         mask = action_mask["action"]
         action = {
             "action": Action.PASS,
-            "raise_amount": [0, 0]  # No raise amount since we are folding
+            "raise_amount": [0]  # No raise amount since we are folding
         }
         if mask[Action.PASS.value]: # Must pass
             pass
@@ -75,7 +75,7 @@ class CallAgent(Agent):
         mask = action_mask["action"]
         action = {
             "action": Action.PASS,
-            "raise_amount": [0, 0]  # No raise amount since we are folding
+            "raise_amount": [0]  # No raise amount since we are folding
         }
         if mask[Action.PASS.value]: # Must pass
             pass
@@ -109,7 +109,7 @@ class RaiseAgent(Agent):
         mask = action_mask["action"]
         action = {
             "action": Action.PASS,
-            "raise_amount": [0, 0]  # No raise amount since we are folding
+            "raise_amount": [0]  # No raise amount since we are folding
         }
         if mask[Action.PASS.value]: # Must pass
             pass
