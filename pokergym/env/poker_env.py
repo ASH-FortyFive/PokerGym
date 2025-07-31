@@ -1,6 +1,6 @@
 import functools
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
@@ -8,103 +8,60 @@ from deuces import Card, Evaluator
 from gymnasium.spaces import Box, Dict, Discrete, MultiBinary, MultiDiscrete
 from gymnasium.utils import EzPickle
 from pettingzoo import AECEnv
-from pettingzoo.utils import wrappers
+from pettingzoo.utils import AgentSelector, wrappers
 
 from pokergym.env.cards import SeededDeck, card_to_int
 from pokergym.env.config import PokerConfig
 from pokergym.env.custom_spaces import MaskableBox
 from pokergym.env.enums import Action, BettingRound
 from pokergym.env.player import Player
+from pokergym.env.poker_logic import ActionDict, Poker, PokerGameState
 from pokergym.visualise.terminal_vis import terminal_render
 
 
-@dataclass
-class PokerGameState:
-    players: List[Player] = field(default_factory=list)
-    community_cards: List[Card] = field(default_factory=list)
-    pot: int = 0
-    first_dealer: int = 0
-    current_idx: int = 0
-    dealer_idx: int = 0
-    bb_idx: int = 0
-    sb_idx: int = 0
-    current_bet: int = 0
-    betting_round: BettingRound = BettingRound.START
-    round_number: int = 0
-    stack_size: int = 0
-    num_players: int = 0
-    deck: SeededDeck = field(default_factory=SeededDeck)
-
-    def reset_for_new_hand(self):
-        """
-        Reset the game state for a new hand.
-        This includes resetting player states, community cards, pot, and betting round.
-        """
-        self.community_cards = []
-        self.pot = 0
-        self.current_bet = 0
-        self.deck.shuffle()
-        for player in self.players:
-            player.reset_for_new_hand()
-
-    def reset(self, seed: Optional[int] = None):
-        """
-        Fully reset the game state, including the deck.
-        If a seed is provided, it will create a seeded deck for reproducibility.
-        """
-        self.betting_round = BettingRound.START
-        self.round_number = 0
-        self.dealer_idx = self.first_dealer
-        self.deck = SeededDeck(seed) if seed is not None else SeededDeck()
-        self.players = [
-            Player(idx=i, _chips=self.stack_size) for i in range(self.num_players)
-        ]
-        self.reset_for_new_hand()
-
-
 def env(**kwargs):
+    """Wrapper function to create a Poker environment.
+    Args:
+        **kwargs: Additional keyword arguments to pass to the Poker environment.
+    Returns:
+        An instance of the Poker environment, wrapped with various utility wrappers.
+    """
     env = raw_env(**kwargs)
     # env = wrappers.TerminateIllegalWrapper(env, illegal_reward=-1)
-    env = wrappers.AssertOutOfBoundsWrapper(env)
-    env = wrappers.OrderEnforcingWrapper(env)
+    # env = wrappers.AssertOutOfBoundsWrapper(env)
+    # env = wrappers.OrderEnforcingWrapper(env)
     return env
 
 
 class raw_env(AECEnv, EzPickle):
+    """Poker environment for Texas Hold'em.
+    This class wraps the Poker logic to follow the AEC (Agent Environment Cycle) interface.
+    It supports multiple players, betting rounds, and various poker actions.
+    """
+
     metadata = {
-        "name": "PokerEnv_v0",
+        "name": "PokerEnv_v1",
         "render_modes": ["terminal"],
     }
 
-    def __init__(self, config: PokerConfig = PokerConfig(), seed: Optional[int] = None):
+    def __init__(
+        self,
+        config: PokerConfig = PokerConfig(),
+        seed: Optional[int] = None,
+        autorender: bool = False,
+    ):
         EzPickle.__init__(self, config, seed)
         super().__init__()
-
-        self.config = config
-        self.render_mode = config.render_mode
         self.seed = seed
-        self.np_random = np.random.default_rng(seed)
-        self.first_dealer = (
-            config.first_dealer
-            if config.first_dealer is not None
-            else self.np_random.integers(0, config.num_players - 1)
-        )
-
-        # Initialize the game state
-        self.game_state = PokerGameState(
-            stack_size=config.starting_stack,
-            num_players=config.num_players,
-            first_dealer=self.first_dealer,
-        )
-        self.MAX_CHIPS = self.config.starting_stack * self.config.num_players
-        self.evaluator = Evaluator()
+        self.poker = Poker(config=config, seed=self.seed, autorender=autorender)
 
         # AECEnv Attributes
         ## Following https://pettingzoo.farama.org/api/aec/
-        self.possible_agents = list(range(config.num_players))
+        self.possible_agents = [f"player_{i}" for i in range(config.num_players)]
         self.agent_name_mapping = dict(
-            zip(self.possible_agents, list(range(len(self.possible_agents))))
+            zip(self.possible_agents, range(config.num_players))
         )
+        self.inv_agent_name_mapping = {v: k for k, v in self.agent_name_mapping.items()}
 
         # Players have identical observation and action spaces
         self.observation_spaces = {
@@ -114,23 +71,17 @@ class raw_env(AECEnv, EzPickle):
             agent: self.action_space(agent) for agent in self.possible_agents
         }
 
-    def _was_dead_step(self, action):
-        # Want to update state and do my own agent selection
-        agent = self.agent_selection
-        self.game_state.players[agent].active = False
-        super()._was_dead_step(action)
-        self.agent_selection = agent
-        # self._agent_selector.reinit(self.agents)
-        # self._agent_selector._current_agent = self.agent_selection
-        # self._agent_selector.selected_agent = self.agent_selection
-
     # Gymnasium Environment Methods
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
-        """
-        Reset the environment to the initial state.
+        """Reset the environment to the initial state.
+        Args:
+            seed: Optional seed for reproducibility.
+            options: Additional options for resetting the environment.
+        Returns:
+            A tuple containing the initial observations for all agents.
         """
         self.seed = seed if seed is not None else self.seed
-        self.game_state.reset(self.seed)
+        self.poker.reset(seed=self.seed, options=options)
 
         self.agents = self.possible_agents.copy()
         self.rewards = {agent: 0.0 for agent in self.agents}
@@ -139,82 +90,94 @@ class raw_env(AECEnv, EzPickle):
         self.truncations = {agent: False for agent in self.agents}
         self.infos = {agent: {} for agent in self.agents}
 
-        # self._agent_selector = AgentSelector(self.agents)
-        # self.agent_selection = self._agent_selector.next()
-        self.agent_selection = 3 % len(
-            self.agents
-        )  # Start with a fixed agent for testing
+        self._agent_selector = AgentSelector(self.agents)
+        self.agent_selection = self._agent_selector.reset()
 
-        self._cards = options.get("cards", {}) if options else {}
-        self.start_round()
+        self.agent_selection = self.inv_agent_name_mapping[
+            self.poker.game_state.current_idx
+        ]
 
-        return self.game_state, {}
-
-    def close(self):
-        pass
-
+    # Spaces
     @functools.lru_cache(maxsize=None)
     def action_space(self, agent=None):
+        """Get the action space for a specific agent.
+        Args:
+            agent: The agent for which to get the action space. If None, returns the default action space.
+            Passing the agent sets the seed used to sample actions.
+        Returns:
+            A gymnasium Discrete space representing the action space for the agent.
         """
-        Get the space of all possible actions for the agent.
-        """
-        seed = self.seed + agent if self.seed is not None else None
+        agent_id = self.agent_name_mapping[agent] if agent is not None else None
+        seed = self.seed + agent_id if self.seed is not None else None
+        MAX_BB = float(self.poker.MAX_CHIPS / self.poker.config.big_blind)
         return Dict(
             {
-                "action": Discrete(
-                    len(Action), seed=seed
-                ),  # Action space for the agent
-                "raise_amount": MaskableBox(
-                    low=0.0, high=1.0, shape=(), seed=seed
-                ),  # Amount to raise
+                # Action space for the agent
+                "action": Discrete(len(Action), seed=seed),
+                # Raise amount space for the agent, normalized to be in terms of big blinds
+                "total_bet": MaskableBox(low=0.0, high=MAX_BB, shape=(), seed=seed),
             }
         )
 
     @functools.lru_cache(maxsize=None)
     def observation_space(self, agent=None):
-        N = self.config.num_players
+        """Get the observation space for a specific agent.
+        Currently, all agents share the same observation space.
+        Args:
+            agent: The agent for which to get the observation space. If None, returns the default observation space.
+        Returns:
+            A gymnasium Dict space representing the observation space for the agent.
+        """
+        N = self.poker.game_state.num_players
+        MAX_BB = float(self.poker.MAX_CHIPS / self.poker.config.big_blind)
         return Dict(
             {
                 # Per-agent observations
-                "hand": MultiDiscrete(
-                    [53] * self.config.max_hand_cards
-                ),  # 53 to account for no card
+                ## Players hands, 53 to account for no card (0  )
+                "hand": MultiDiscrete([53] * self.poker.config.max_hand_cards),
                 # Global observations
                 ## Table state
+                ### Community cards, 53 to account for no card (0)
                 "community_cards": MultiDiscrete(
-                    [53] * self.config.max_community_cards
-                ),  # 53 to account for no card
-                "pot": Box(low=0.0, high=1.0, shape=()),
-                "current_bet": Box(low=0.0, high=1.0, shape=()),
-                ## Relative player locations
-                "chip_counts": Box(low=0.0, high=1.0, shape=(N,)),
-                "bets": Box(low=0.0, high=1.0, shape=(N,)),
-                "total_contribution": Box(low=0.0, high=1.0, shape=(N,)),
+                    [53] * self.poker.config.max_community_cards
+                ),
+                ### Normalized to represent fractions of the maximum chips
+                "pot": Box(low=0.0, high=MAX_BB, shape=()),
+                "current_bet": Box(low=0.0, high=MAX_BB, shape=()),
+                ## Relative to player locations
+                "chip_counts": Box(low=0.0, high=MAX_BB, shape=(N,)),
+                "bets": Box(low=0.0, high=MAX_BB, shape=(N,)),
+                "total_contribution": Box(low=0.0, high=MAX_BB, shape=(N,)),
                 "folded": MultiBinary(N),
                 "all_in": MultiBinary(N),
                 "active": MultiBinary(N),
                 "relative_dealer_position": Box(low=0.0, high=1.0, shape=()),
                 ## Meta Observations
                 "betting_round": Discrete(len(BettingRound)),
-                "round_number": Box(low=0.0, high=1.0, shape=()),
+                "hand_number": Box(low=0.0, high=1.0, shape=()),
                 # Action Masks
                 "action_mask": Dict(
                     {
                         "action": MultiBinary(len(Action)),  # 0 or 1 for each action
-                        "raise_amount": Box(low=0.0, high=1.0, shape=(2,)),
+                        "total_bet": Box(low=0.0, high=MAX_BB, shape=(2,)),
                     }
                 ),
             }
         )
 
+    # Reading Game State
     def observe(self, agent):
-        """
-        Get the observation space for a specific agent.
+        """Get the observation space for a specific agent.
         The observation includes the agent's hand and the global observation.
+        Args:
+            agent: The agent for which to get the observation.
+        Returns:
+            A dictionary containing the agent's hand and the global observation.
         """
+        agent_id = self.agent_name_mapping[agent]
         obs = self.state()
-        obs.update(self._get_agent_obs(agent))
-        obs.update(self._get_action_mask(agent))
+        obs.update(self._get_agent_obs(agent_id))
+        obs.update(self._get_action_mask(agent_id))
 
         relative_obs = [
             "chip_counts",
@@ -225,630 +188,239 @@ class raw_env(AECEnv, EzPickle):
             "active",
         ]
         for key in relative_obs:
-            obs[key] = self._rotate_to_idx(obs[key], agent)
-        obs["relative_dealer_position"] = float(
-            (self.game_state.dealer_idx - agent)
-            % self.config.num_players
-            / self.config.num_players
+            obs[key] = self._rotate_to_idx(obs[key], agent_id)
+        obs["relative_dealer_position"] = np.array(
+            (self.poker.game_state.dealer_idx - agent_id)
+            % self.poker.config.num_players
+            / self.poker.config.num_players,
+            dtype=np.float32,
         )
         return obs
 
     def state(self):
+        """Get the global state of the game.
+        This includes the community cards, pot, current bet, betting round, and round number.
+        Everything is normalized to represent fractions of the maximum chips or rounds.
+        Returns:
+            A dictionary containing the global state of the game.
         """
-        Get the observation visible to all agents.
-        This includes the community cards, pot, current bet, and betting round.
-        """
-        obs = {
-            "community_cards": [
+        # Per-agent observations
+        folded = np.zeros(self.poker.config.num_players, dtype=np.int8)
+        all_in = np.zeros(self.poker.config.num_players, dtype=np.int8)
+        active = np.zeros(self.poker.config.num_players, dtype=np.int8)
+        bets = np.zeros(self.poker.config.num_players, dtype=np.float32)
+        total_contribution = np.zeros(self.poker.config.num_players, dtype=np.float32)
+        chip_counts = np.zeros(self.poker.config.num_players, dtype=np.float32)
+        for p in self.poker.game_state.players:
+            folded[p.idx] = p.folded
+            all_in[p.idx] = p.all_in
+            active[p.idx] = p.active
+            bets[p.idx] = self._norm_chip(p.bet)
+            total_contribution[p.idx] = self._norm_chip(p.total_contribution)
+            chip_counts[p.idx] = self._norm_chip(p.chips)
+        # Table observations
+        cards = np.array(
+            [
                 (
-                    card_to_int(self.game_state.community_cards[i])
-                    if i < len(self.game_state.community_cards)
+                    card_to_int(self.poker.game_state.community_cards[i])
+                    if i < len(self.poker.game_state.community_cards)
                     else 0
                 )
-                for i in range(self.config.max_community_cards)
+                for i in range(self.poker.config.max_community_cards)
             ],
-            "pot": self.game_state.pot / self.MAX_CHIPS,
-            "current_bet": self.game_state.current_bet / self.MAX_CHIPS,
-            "betting_round": self.game_state.betting_round.value,
-            "chip_counts": [
-                player.chips / self.MAX_CHIPS for player in self.game_state.players
-            ],
-            "bets": [player.bet / self.MAX_CHIPS for player in self.game_state.players],
-            "total_contribution": [
-                player.total_contribution / self.MAX_CHIPS
-                for player in self.game_state.players
-            ],
-            "folded": [player.folded for player in self.game_state.players],
-            "all_in": [player.all_in for player in self.game_state.players],
-            "active": [player.idx in self.agents for player in self.game_state.players],
-            "round_number": (
-                self.game_state.round_number / self.config.max_rounds
-                if self.config.max_rounds > 0
+            dtype=np.int8,
+        )
+        hand_number = np.array(
+            (
+                self.poker.game_state.hand_number / self.poker.config.max_hands
+                if self.poker.config.max_hands > 0
                 else 0
             ),
-        }
-
-        return obs
-
-    def _get_agent_obs(self, agent):
-        """
-        Get the observation specific to the agent.
-        This includes the agent's hand and the global observation.
-        """
-        player = self.game_state.players[agent]
+            dtype=np.float32,
+        )
         return {
-            "hand": [card_to_int(card) for card in player.hand],
+            "community_cards": cards,
+            "pot": np.array(
+                self._norm_chip(self.poker.game_state.pot), dtype=np.float32
+            ),
+            "current_bet": np.array(
+                self._norm_chip(self.poker.game_state.current_bet), dtype=np.float32
+            ),
+            "betting_round": self.poker.game_state.betting_round.value,
+            "chip_counts": chip_counts,
+            "bets": bets,
+            "total_contribution": total_contribution,
+            "folded": folded,
+            "all_in": all_in,
+            "active": active,
+            "hand_number": hand_number,
         }
 
-    def _get_action_mask(self, agent):
+    def _get_agent_obs(self, agent_id):
+        """Get the observation for a specific agent.
+        Args:
+            agent_id (int): The agent for which to get the observation.
+        Returns:
+            A dictionary containing the agent's hand and its index.
         """
-        Mask actions based on the current game state.
+        player = self.poker.game_state.players[agent_id]
+        hand = np.array(
+            [
+                card_to_int(player.hand[i]) if i < len(player.hand) else 0
+                for i in range(self.poker.config.max_hand_cards)
+            ],
+            dtype=np.int8,
+        )
+        return {
+            "hand": hand,
+        }
+
+    def _get_action_mask(self, agent_id):
+        """Get the action mask for a specific agent.
+        Args:
+            agent_id (int): The agent for which to get the action mask.
+        Returns:
+            A dictionary containing the action mask for the agent.
         """
-        player = self.game_state.players[agent]
-        mask = [False] * len(Action)  # Initialize all actions as invalid
-        min_raise = 0.0
-        max_raise = 0.0
-
-        # Check if player can "pass", an action that allows "skipping" their turn
-        players_in_hand = [
-            p
-            for p in self.game_state.players
-            if (p.idx in self.agents) and not p.folded and not p.all_in
-        ]
-        if (
-            player.folded  # Folded players must "pass"
-            or not player.idx in self.agents  # Non-agent players must "pass"
-            or player.all_in  # All-in players must "pass"
-            or (
-                len(players_in_hand) == 1 and player.bet == self.game_state.current_bet
-            )  # Last player must "pass"
-            or agent
-            != self.game_state.current_idx  # If the agent is not the current player, they must "pass"
-        ):
-            mask[Action.PASS.value] = True  # Allow PASS action
-            # If the player is folded, inactive, or all-in we only allow PASS
-            return {
-                "action_mask": {
-                    "action": np.array(mask, dtype=np.int8),
-                    "raise_amount": np.array([min_raise, max_raise], dtype=np.float32),
-                }
-            }
-        elif len(players_in_hand) == 1 and player in players_in_hand:
-            # Essentially, when other active players folded before you got any turns. Pot will be uncontested, but you must call the current bet as you cannot earn more chips then you put in.
-            mask[Action.CALL.value] = True
-            return {
-                "action_mask": {
-                    "action": np.array(mask, dtype=np.int8),
-                    "raise_amount": np.array([min_raise, max_raise], dtype=np.float32),
-                }
-            }
-
-
-        mask[Action.FOLD.value] = True  # Always allow folding
-
-        # Player's bet matches the current bet. They can CHECK.
-        if player.bet == self.game_state.current_bet:
-            mask[Action.CHECK.value] = True
-        # Player's bet is less than the current bet. They can CALL or .
-        elif player.bet < self.game_state.current_bet:
-            # Player can call (or go all-in) if they have any chips left.
-            if player.chips > 0:
-                mask[Action.CALL.value] = True
-        else:
-            # This case should not happen in a valid game state.
-            raise ValueError("Player bet exceeds current bet, inconsistent state.")
-
-        # To raise, they must be able to at least match the call amount plus a minimum raise.
-        ## An all-in raise for less than a min-raise is also possible
-        to_raise = self.game_state.current_bet - player.bet + self.config.min_raise
-        if player.chips >= to_raise:
-
-            other_max = [
-                    p.bet + p.chips
-                    for p in self.game_state.players
-                    if (p.idx in self.agents) and not p.folded and p.idx != player.idx
-                ] 
-            other_max = max(other_max) if other_max else 9e99
-            if other_max != 0:
-                # If all other players are all-in or have no chips, there is no raise possible
-                mask[Action.RAISE.value] = True
-                min_raise = to_raise
-                max_raise = player.chips
-
-                min_raise = min(
-                    min_raise, other_max
-                )  # Limit raise to the maximum of all other players' chips
-                max_raise = min(
-                    max_raise, other_max
-                )  # Limit raise to the minimum of all other players' chips
-
-        min_raise /= self.MAX_CHIPS
-        max_raise /= self.MAX_CHIPS
-
+        action_dict = self.poker.legal_actions(idx=agent_id)
+        action_mask = np.zeros(len(Action), dtype=np.int8)
+        for action in action_dict["action"]:
+            action_mask[action.value] = 1
+        total_bet = np.vectorize(lambda x: self._norm_chip(x))(
+            action_dict["total_bet"]
+        ).astype(np.float32)
         return {
             "action_mask": {
-                "action": np.array(mask, dtype=np.int8),
-                "raise_amount": np.array([min_raise, max_raise], dtype=np.float32),
+                "action": action_mask,
+                "total_bet": total_bet,
             }
         }
 
-    def step(self, action: Dict):
+    # Overriding AECEnv Methods
+    def last(self, observe: bool = True
+    ) -> tuple["ObsType", float, bool, bool, dict[str, Any]]:
+        """Returns observation, cumulative reward, terminated, truncated, info for the current agent (specified by self.agent_selection)."""
+        obs, _, term, trunc, info = super().last(observe=observe)
+        reward = self._cumulative_rewards[self.agent_selection]
+        return (
+            obs,
+            reward,
+            term,
+            trunc,
+            info
+        )
+
+    
+     # Stepping the Environment
+    def step(self, action):
+        """Perform a step in the environment.
+        This method processes the action taken by the current agent, updates the game state,
+        and manages the turn order.
+        Will cycle through agents, only updating the game logic if the current agent is the one taking action.
+        Args:
+            action: The action to perform, which includes the action type and total bet amount.
+        Raises:
+            ValueError: If the action is not valid for the current agent.
         """
-        Execute one time step within the environment.
-        Must take null "pass" actions for agents if they cannot make a legal move or are about to be removed from the game.
-        Input:
-        - action: A dictionary containing the "action" and optional "raise_amount".
-        """
-        player = self.game_state.players[self.agent_selection]
+        self._cumulative_rewards[self.agent_selection] = 0.0  # Clear rewards at the start of each step
+        self._clear_rewards()
         if (
             self.terminations[self.agent_selection]
             or self.truncations[self.agent_selection]
         ):
             self._was_dead_step(action)
-            self._next_step()
-            return
+            if len(self.agents) != 0:
+                self.agent_selection = self._agent_selector.next()
+            return 
 
-        if self.game_state.betting_round == BettingRound.END:
-            # If last remaining player game must end
-            active_players = [
-                p.idx
-                for p in self.game_state.players
-                if not p.folded and not p.all_in and p.active
-            ]
-            if len(active_players) == 1 and self.agent_selection in active_players:
-                self.terminations[self.agent_selection] = True
-            self._next_step()
-            return
+        agent_id = self.agent_name_mapping[self.agent_selection]
+        player_deltas = None  # None if the hand is not ended
+        if agent_id == self.poker.game_state.current_idx:
+            action_dict = self._convert_action(action)
+            player_deltas = self.poker.step(idx=agent_id, action_dict=action_dict)
 
-        # Take the Action
-        _action = Action(action["action"])
-        self._handle_action(player.idx, _action, action)
+        # Deltas being provided means the hand has ended
+        if player_deltas is not None:
+            # Calculate rewards and update game state
+            for player_idx, chip_delta in player_deltas.items():
+                agent = self.inv_agent_name_mapping[player_idx]
+                norm_delta = self._norm_chip(chip_delta)
+                if agent in self.rewards:
+                    self.rewards[agent] += norm_delta
+            self._accumulate_rewards()
 
-        # Check if betting round is finished:
-        active_players = [
-            p
-            for p in self.game_state.players
-            if not p.folded and not p.all_in and p.active
-        ]
-        round_over = len(active_players) == 0
-        if not round_over:
-            round_over = True
-            for p in active_players:
-                if p.last_action is None or p.bet != self.game_state.current_bet:
-                    round_over = False
-                    break
-        if not round_over:
-            raisers = [p.idx for p in active_players if p.last_action == Action.RAISE]
-            next_idx = self.next_active_player_idx(player.idx, check_termination=True)
-            if next_idx in raisers and len(raisers) == 1:
-                round_over = True
+            
+            # self._accumulate_rewards()
 
-        if len(active_players) == 1 and all([p.bet == self.game_state.current_bet is not None for p in active_players]):
-            # Only one player remains, so skip to showdown
-            while self.game_state.betting_round != BettingRound.SHOWDOWN:
-                self.step_round()
-        elif round_over:
-            self.step_round()
+            # Update terminations and truncations
+            self.terminations = {
+                agent: (
+                    not self.poker.game_state.players[
+                        self.agent_name_mapping[agent]
+                    ].active
+                )
+                for agent in self.agents
+            }
+            if self.poker.game_over():
+                self.truncations = {agent: True for agent in self.agents}
 
-
-        if self.game_state.betting_round == BettingRound.SHOWDOWN:
-            self.end_round()
-            if self.game_state.betting_round == BettingRound.START:
-                self.start_round()
-            self.agent_selection = self.next_active_player_idx(self.agent_selection)
-
-        # TODO: Add infos
-        # self.infos[self.agent_selection] = {}
-
-        self._next_step()
+        self.agent_selection = self._agent_selector.next()
+        # self._clear_rewards()
         return
 
-    def _next_step(self):
-        if self.agent_selection == self.game_state.current_idx:
-            self.game_state.current_idx = self.next_active_player_idx(
-                self.agent_selection
-            )
-        self.agent_selection = self.next_active_player_idx(self.agent_selection)
-        self._clear_rewards()
-
-    def _handle_action(self, agent: int, action_enum: Action, action: Dict):
+    def _convert_action(self, action) -> ActionDict:
+        """Convert the action dictionary to a format suitable for the Poker logic.
+        Args:
+            action: The action dictionary containing the action type and total bet amount.
+        Returns:
+            An ActionDict object representing the action to be taken.
         """
-        Apply the action taken by the agent to the game state.
-        Allows for all actions defined in the Action enum.
-        Includes error handling for invalid actions.
-        """
-        player = self.game_state.players[agent]
-
-        assert action_enum is not None, "Action cannot be None."
-
-        if action_enum is Action.FOLD:
-            player.folded = True
-        elif action_enum is Action.CHECK:
-            assert (
-                player.bet == self.game_state.current_bet
-            ), "Player can only check if their bet matches the current bet."
-        elif action_enum is Action.CALL:
-            assert player.chips > 0, "Player cannot call with no chips."
-            to_call = min(self.game_state.current_bet - player.bet, player.chips)
-            player.make_bet(to_call)
-        elif action_enum is Action.RAISE:
-            # Convert normalized raise amount to absolute chips
-            extra_bet = action.get("raise_amount", 0.0)
-            extra_chips = round(extra_bet * self.MAX_CHIPS)
-            other_max = [
-                    p.bet + p.chips
-                    for p in self.game_state.players
-                    if (p.idx in self.agents) and not p.folded and p.idx != player.idx
-                ] 
-            other_max = max(other_max) if other_max else 9e99
-            min_bet = self.game_state.current_bet + self.config.min_raise
-            min_bet = min(min_bet, other_max)
-            assert (
-                player.bet + extra_chips >= min_bet
-            ), "Player must raise at least the minimum raise amount."
-            player.make_bet(extra_chips)
-            self.game_state.current_bet = player.bet
-        elif action_enum is Action.PASS:
-            pass
-        else:
-            raise ValueError(f"Invalid action: {action} for player {agent}.")
-
-        if not action_enum is Action.PASS:
-            # Update the player's last action
-            player.last_action = action_enum
-        return True
-
-    # Poker Logic
-    def start_round(self):
-        """
-        Start a new round of poker, dealing cards and setting blinds.
-        - If `cards` is provided (dict of player index and list of cards), it will use those cards instead of drawing from the deck.
-        """
-        assert (
-            self.game_state.betting_round == BettingRound.START
-        ), "Cannot start a new round before ending the current one."
-        # Reset the game state for a new round
-        self.game_state.reset_for_new_hand()
-        for p in self.game_state.players:
-            p.reset_for_new_hand()
-
-        # Deal initial cards
-        ## If cards are provided, use those cards for the players
-        cards_for_round = self._cards.get(self.game_state.round_number)
-        cards = cards_for_round.get(BettingRound.START) if cards_for_round else None
-        if cards:
-            for i, _cards in cards.items():
-                if len(_cards) != self.config.max_hand_cards:
-                    raise ValueError(
-                        f"Player {i} must receive exactly {self.config.max_hand_cards} cards."
-                    )
-                if i >= self.config.num_players:
-                    continue
-                p = self.game_state.players[i]
-                if not p.idx in self.agents:
-                    continue
-                p.hand = _cards
-                for card in _cards:
-                    self.game_state.deck.cards.remove(card)
-        ## Otherwise, draw cards from the deck or draw to complete the hands
-        for i in range(self.config.max_hand_cards * self.config.num_players):
-            p = self.game_state.players[i % self.config.num_players]
-            if len(p.hand) >= self.config.max_hand_cards:
-                continue
-            if not p.idx in self.agents:
-                continue
-            card = self.game_state.deck.draw(1)
-            p.add_card(card)
-
-        # Set blinds
-        self.game_state.sb_idx = self.next_active_player_idx(
-            self.game_state.dealer_idx, check_termination=True
+        bet = np.vectorize(lambda x: self._denorm_chip(x))(action["total_bet"])
+        action_enum = Action(action["action"])
+        return ActionDict(
+            action=action_enum,
+            total_bet=bet,
         )
-
-        sb_player = self.game_state.players[self.game_state.sb_idx]
-        sb_bet = self.config.small_blind
-        if sb_player.chips < sb_bet:
-            sb_bet = sb_player.chips
-            assert sb_bet > 0, "Small blind cannot be zero."
-            sb_player.all_in = True
-        sb_player.make_bet(sb_bet)
-
-        self.game_state.bb_idx = self.next_active_player_idx(
-            self.game_state.sb_idx, check_termination=True
-        )
-        bb_player = self.game_state.players[self.game_state.bb_idx]
-        bb_bet = self.config.big_blind
-        if bb_player.chips < bb_bet:
-            bb_bet = bb_player.chips
-            assert bb_bet > 0, "Big blind cannot be zero."
-            bb_player.all_in = True
-        bb_player.make_bet(bb_bet)
-
-        # Set the current bet and betting round
-        self.game_state.current_bet = max(sb_bet, bb_bet)
-        self.game_state.betting_round = BettingRound.PREFLOP
-        self.game_state.current_idx = self.next_active_player_idx(
-            self.game_state.bb_idx, check_termination=True
-        )
-
-    def end_round(self):
-        """
-        End the current round of poker, determining the winner and distributing the pot.
-        """
-        # Find the winner(s) and distribute the pot
-        assert (
-            self.game_state.betting_round == BettingRound.SHOWDOWN
-        ), "Cannot end round before showdown."
-        scores = np.array(
-            [
-                self.evaluator.evaluate(player.hand, self.game_state.community_cards)
-                for player in self.game_state.players
-            ]
-        )
-        winners = set()
-        pots = self._construct_pots()
-        for pot_amount, player_indices in pots:
-            # Determine the winners for this pot
-            min_score = np.min(scores[player_indices])
-            pot_winners = [
-                self.game_state.players[i]
-                for i in player_indices
-                if scores[i] == min_score
-            ]
-            assert pot_winners, "No winners found for the pot."
-            # Split the pot among the winners
-            split_amount = pot_amount // len(pot_winners)
-            for winner in pot_winners:
-                winner.give_chips(split_amount)
-                winners.add(winner.idx)
-                self.game_state.pot -= split_amount
-            remainder = pot_amount % len(pot_winners)
-            payout_player = self.game_state.players[
-                self.next_active_player_idx(self.game_state.dealer_idx)
-            ]
-            while remainder > 0:
-                if payout_player in pot_winners:
-                    payout_player.give_chips(1)
-                    self.game_state.pot -= 1
-                    remainder -= 1
-                payout_player = self.game_state.players[
-                    self.next_active_player_idx(payout_player.idx)
-                ]
-        assert (
-            self.game_state.pot == 0
-        ), f"Pot not fully distributed, remaining: {self.game_state.pot}"
-
-        # Give rewards
-        for p in self.agents:
-            if p in self.terminations or p in self.truncations:
-                continue
-            chips = self.game_state.players[p].chips
-            self.rewards[p] = (
-                chips - self.config.starting_stack
-            ) / self.config.starting_stack
-            self._cumulative_rewards[p] += self.rewards[p]
-            # print(
-            #     f"Player {p.idx} reward: {self.rewards[p.idx]} (Chips: {p.chips}, Starting Stack: {self.config.starting_stack})"
-            # )
-
-        # Remove Players who are out of chips
-        active_count = self.config.num_players
-        for p in self.game_state.players:
-            if p.chips == 0 and p.idx in self.agents:
-                self.terminations[p.idx] = True
-                active_count -= 1
-            elif not p.idx in self.agents:
-                active_count -= 1
-
-        # Update Game State
-        if active_count == 0:
-            raise ValueError("All players are out of chips. Cannot continue the game.")
-        elif active_count == 1:
-            winners.add(
-                next(p.idx for p in self.game_state.players if p.idx in self.agents)
-            )
-            winner = self.game_state.players[winners.pop()]
-            self.terminations[winner.idx] = True
-            self.game_state.betting_round = BettingRound.END
-        else:
-            self.game_state.betting_round = BettingRound.START
-            self.game_state.round_number += 1
-            self.game_state.dealer_idx = self.next_active_player_idx(
-                self.game_state.dealer_idx, check_termination=True
-            )
-
-        if self.game_state.round_number == self.config.max_rounds:
-            for agents in self.truncations:
-                self.truncations[agents] = True
-            self.game_state.betting_round = BettingRound.END
-
-        return winners
-
-    def step_round(self, cards: Optional[dict[BettingRound, List[Card]]] = None):
-        """
-        Advance the betting round to the next stage (Flop, Turn, River).
-        - If `cards` is provided (dict of betting round and list of cards), it will use those cards instead of drawing from the deck.
-        TODO: Make the number of rounds dynamic based on the config.
-        """
-        if self.game_state.betting_round == BettingRound.START:
-            raise ValueError("Cannot step round before starting a round.")
-        if self.game_state.betting_round == BettingRound.PREFLOP:
-            self.game_state.betting_round = BettingRound.FLOP
-            self._collect_bets()
-            self._clear_actions()
-            self.game_state.community_cards += self._draw_for_round(BettingRound.FLOP)
-            self.game_state.current_idx = self.nearest_active_player_idx(
-                self.game_state.dealer_idx
-            )
-        elif self.game_state.betting_round == BettingRound.FLOP:
-            self.game_state.betting_round = BettingRound.TURN
-            self._collect_bets()
-            self._clear_actions()
-            self.game_state.community_cards += self._draw_for_round(BettingRound.TURN)
-            self.game_state.current_idx = self.nearest_active_player_idx(
-                self.game_state.dealer_idx
-            )
-        elif self.game_state.betting_round == BettingRound.TURN:
-            self.game_state.betting_round = BettingRound.RIVER
-            self._collect_bets()
-            self._clear_actions()
-            self.game_state.community_cards += self._draw_for_round(BettingRound.RIVER)
-            self.game_state.current_idx = self.nearest_active_player_idx(
-                self.game_state.dealer_idx
-            )
-        elif self.game_state.betting_round == BettingRound.RIVER:
-            self._collect_bets()
-            self._clear_actions()
-            self.game_state.betting_round = BettingRound.SHOWDOWN
-
-    def _collect_bets(self):
-        """
-        Collect bets from all active players.
-        This is called at the end of each betting round to update the pot and player contributions.
-        """
-        for p in self.game_state.players:
-            amount = p.bet
-            if amount != self.game_state.current_bet:
-                if (
-                    (p.idx in self.agents)
-                    and not p.folded
-                    and not p.all_in
-                    and self.terminations.get(p.idx, False)
-                    and self.truncations.get(p.idx, False)
-                ):
-                    raise ValueError(
-                        f"Player {p.idx} must bet {self.game_state.current_bet}, but bet {amount}."
-                    )
-            self.game_state.pot += amount
-            p.bet = 0
-        self.game_state.current_bet = 0
-
-    def _clear_actions(self):
-        """
-        Clear the actions of all players at the end of a betting round.
-        This is called to reset the state for the next betting round.
-        """
-        for p in self.game_state.players:
-            p.last_action = None
-
-    def _draw_for_round(self, betting_round: BettingRound):
-        """
-        Draw cards for the specified betting round.
-        - If `cards` is provided, it will use those cards instead of drawing from the deck.
-        """
-        if betting_round not in self.config.cards_per_round:
-            raise ValueError(f"Invalid betting round: {betting_round}")
-
-        # Draw predetermined cards if provided
-        drawn = []
-        burn = None
-        cards_for_round = self._cards.get(self.game_state.round_number)
-        cards = cards_for_round.get(betting_round) if cards_for_round else None
-        if cards:
-            if len(cards) > self.config.cards_per_round[betting_round] + 1:
-                raise ValueError(
-                    f"Expected at most {self.config.cards_per_round[betting_round]} cards for {betting_round}, got {len(cards)}."
-                )
-            for card in cards:
-                if burn is None:
-                    self.game_state.deck.cards.remove(card)
-                    burn = card
-                    continue
-                self.game_state.deck.cards.remove(card)
-                drawn.append(card)
-
-        # Draw from the deck if no / not enough cards were provided
-        if burn is None:
-            burn = self.game_state.deck.draw(1)
-        if len(drawn) < self.config.cards_per_round[betting_round]:
-            remaining = self.config.cards_per_round[betting_round] - len(drawn)
-            for _ in range(remaining):
-                drawn.append(self.game_state.deck.draw())
-        return drawn
 
     # Utility Methods
-    def _rotate_to_idx(self, observation, idx):
+    def _norm_chip(self, value: float) -> float:
+        """Normalize a chip value to be in terms of big blinds."""
+        return float(value / self.poker.config.big_blind)
+
+    def _denorm_chip(self, value: float) -> float:
+        """Denormalize a chip value from being in terms of big blinds to actual chip value."""
+        return round(value * self.poker.config.big_blind)
+
+    def _rotate_to_idx(self, observation: np.ndarray, idx: int) -> np.ndarray:
+        """Rotate the observation array to start from the specified agent index.
+        Args:
+            observation: The observation array to rotate.
+            idx: The index of the agent to start from.
+        Returns:
+            The rotated observation array.
         """
-        Rotate an observation to be start at given idx.
-        """
-        return observation[idx:] + observation[:idx]
-
-    def _find_active_player(
-        self,
-        start_idx: int,
-        direction: int,
-        include_start: bool,
-        check_termination: bool = False,
-    ) -> int:
-        """
-        Finds an active and non-folded player starting from `start_idx`, moving in `direction` (+1 or -1).
-        If `include_start` is True, considers `start_idx` as the first valid candidate.
-        """
-        num_players = self.config.num_players
-        offsets = range(num_players) if include_start else range(1, num_players + 1)
-
-        for offset in offsets:
-            idx = (start_idx + direction * offset) % num_players
-            player = self.game_state.players[idx]
-            active = player.idx in self.agents
-            terminated = (
-                self.terminations.get(player.idx, False)
-                or self.truncations.get(player.idx)
-                if check_termination
-                else False
-            )
-            if active and not terminated:
-                return idx
-        return None
-
-    def next_active_player_idx(self, idx, check_termination: bool = False):
-        return self._find_active_player(
-            idx, 1, include_start=False, check_termination=check_termination
-        )
-
-    def nearest_active_player_idx(self, idx, check_termination: bool = False):
-        return self._find_active_player(
-            idx, 1, include_start=True, check_termination=check_termination
-        )
-
+        if idx == 0:
+            return observation
+        return np.roll(observation, -idx, axis=0)
+    
     def render(self):
-        if self.render_mode == "terminal":
-            terminal_render(self)
-
-    def _construct_pots(self) -> List[Tuple[int, List[int]]]:
+        """Render the environment.
+        Mode is given by the config, default is "terminal".
+        Returns:
+            If the mode is "terminal", prints a representation of the game state.
         """
-        Construct pots based on player contributions (tracked by player.total_contribution).
-        Returns a list of tuples, where each tuple contains the pot amount and a list of player indices who contributed to that pot.
-        TODO: Handle edge cases like players going all-in and uneven contributions.
-        """
-        contributions = [
-            (i, p.total_contribution, (p.idx in self.agents and not p.folded))
-            for i, p in enumerate(self.game_state.players)
-            if p.total_contribution > 0
-        ]
-        contributions.sort(key=lambda x: x[1])
-        pots = []
-        while contributions:
-            min_contribution = contributions[0][1]  # Smallest contribution
-            eligible_players = []
-            pot_amount = 0
-            for idx, contribution, eligible in contributions:
-                pot_amount += min_contribution
-                if eligible:
-                    eligible_players.append(idx)
-            pots.append((pot_amount, eligible_players))
+        self.poker.render()
 
-            # Subtract min_contrib from all and remove 0s
-            contributions = [
-                (idx, contribution - min_contribution, eligible)
-                for idx, contribution, eligible in contributions
-                if contribution - min_contribution > 0
-            ]
-        return pots
+    def close(self):
+        """Close the environment.
+        This method is called to clean up resources when the environment is no longer needed.
+        """
+        pass
 
 
 if __name__ == "__main__":
     import tyro
+    from pettingzoo.test import api_test
 
     # Define a wrapper to include optional seed
     @dataclass
@@ -857,5 +429,25 @@ if __name__ == "__main__":
         seed: Optional[int] = 0  # Default seed value
 
     args = tyro.cli(ExtraArgs)
-    _env = env(config=args.config, seed=args.seed)
-    print(f"Environment: {env}")
+    ENV = env(config=args.config, seed=args.seed, autorender=False)
+    ENV.reset(seed=args.seed)
+    import pdb
+
+    try:
+        api_test(ENV, num_cycles=args.config.max_hands * 10_000, verbose_progress=True)
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        pdb.post_mortem()
+    api_test(ENV, num_cycles=args.config.max_hands * 10_000, verbose_progress=True)
+    # obs = ENV.observe("player_0")
+    # obs_space = ENV.observation_space("player_0")
+    # obs_space.contains(obs)
+    # print("Observation space is valid.")
+    # for key, value in obs_space.items():
+    #     if isinstance(value, Dict):
+    #         for sub_key, sub_value in value.items():
+    #             print(f"{key}.{sub_key}: {sub_value.contains(obs[key][sub_key])}")
+    #     else:
+    #         print(f"{key}: {value.contains(obs[key])}")
+
+    # print("All observations are valid according to the observation space.")

@@ -46,22 +46,22 @@ class HumanAgent(Agent):
         while True:
             try:
                 if self.max_chips is not None:
-                    raise_amount = round(
+                    total_bet = round(
                         input(
                             f"Enter raise amount (min: {min_raise}, max: {max_raise}): "
                         )
                     )
                 else:
-                    raise_amount = float(
+                    total_bet = float(
                         input(
                             f"Enter raise amount (min: {min_raise}, max: {max_raise}): "
                         )
                     )
-                if min_raise <= raise_amount <= max_raise:
+                if min_raise <= total_bet <= max_raise:
                     if self.max_chips is not None:
-                        return np.array(raise_amount / self.max_chips)
+                        return np.array(total_bet / self.max_chips)
                     else:
-                        return np.array(raise_amount)
+                        return np.array(total_bet)
                 else:
                     print(
                         f"Invalid raise amount. Must be between {min_raise} and {max_raise}."
@@ -71,15 +71,15 @@ class HumanAgent(Agent):
 
     def act(self, observation: Any, action_mask: dict) -> dict:
         mask = action_mask["action"]
-        raise_mask = action_mask["raise_amount"]
+        raise_mask = action_mask["total_bet"]
         action = {
             "action": Action.PASS.value,
-            "raise_amount": 0.0,  # No raise amount since we are folding
+            "total_bet": 0.0,  # No raise amount since we are folding
         }
         if mask[Action.PASS.value]:  # Must pass
             pass
         else:
             action["action"] = np.array(self.get_valid_action(mask))
             if action["action"] == Action.RAISE.value:
-                action["raise_amount"] = self.get_valid_raise(raise_mask)
+                action["total_bet"] = self.get_valid_raise(raise_mask)
         return action

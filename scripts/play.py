@@ -1,12 +1,8 @@
-
-from pokergym.agents import (
-    HumanAgent,
-    RandomAgent,
-    FoldAgent,
-)
+from pokergym.agents import FoldAgent, HumanAgent, RandomAgent
 from pokergym.env.enums import Action, BettingRound
 from pokergym.env.texas_holdem import env as PokerEnv
 from pokergym.env.utils import action_pretty_str
+
 
 def player_random_game(config, seed):
     """
@@ -15,23 +11,32 @@ def player_random_game(config, seed):
     env = PokerEnv(config=config, seed=seed)
     env.reset(seed=seed)
     agents = [
-        RandomAgent(idx=i+1, action_space=env.action_space(i))
+        RandomAgent(
+            idx=i + 1, action_space=env.action_space(env.inv_agent_name_mapping[i])
+        )
         for i in range(config.num_players - 1)
     ]
     # agents.append(HumanAgent(idx=0, action_space=env.action_space(config.num_players - 1), max_chips=env.MAX_CHIPS))
-    agents.append(FoldAgent(idx=0, action_space=env.action_space(config.num_players - 1)))
+    agents.append(
+        FoldAgent(
+            idx=0,
+            action_space=env.action_space(
+                env.inv_agent_name_mapping[config.num_players - 1]
+            ),
+        )
+    )
     agents = sorted(agents, key=lambda x: x.idx)
     print(f"Starting game with {len(agents)} agents, you are player {agents[-1].idx}.")
     prev_betting_round = BettingRound.PREFLOP
     for agent in env.agent_iter():
-        # env.render()
+        env.render()
         observation, reward, termination, truncation, info = env.last()
-        print(reward)
         action_mask = observation["action_mask"]
         if termination or truncation:
             action = None
         else:
-            action = agents[agent].act(observation, action_mask)
+            agent_idx = env.agent_name_mapping[agent]
+            action = agents[agent_idx].act(observation, action_mask)
         env.step(action)
         # print(
         #     f"Player {agent}, action: {action_pretty_str(action, max_chips=env.MAX_CHIPS)}"
@@ -44,15 +49,21 @@ def player_random_game(config, seed):
 
     env.close()
 
+
 def main():
     from pokergym.env.config import PokerConfig
-    config = PokerConfig(num_players=6, starting_stack=1000, small_blind=10, big_blind=20)
+
+    config = PokerConfig(
+        num_players=6, starting_chips=1000, small_blind=10, big_blind=20
+    )
     seed = 42
     player_random_game(config, seed)
     print("Game finished.")
 
-if __name__ == "__main__":  
+
+if __name__ == "__main__":
     import pdb
+
     try:
         main()
     except Exception as e:

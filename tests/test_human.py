@@ -11,7 +11,7 @@ MASKS = [
             "raise": True,
             "pass": True
         },
-        "raise_amount": [10, 100]
+        "total_bet": [10, 100]
     }
 ]
 INPUTS = [
@@ -20,7 +20,7 @@ INPUTS = [
 OUTPUTS = [
     {
         "action": "fold",
-        "raise_amount": [0]
+        "total_bet": [0]
     }
 ]
 

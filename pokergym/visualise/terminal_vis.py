@@ -1,16 +1,16 @@
-from typing import List
-from pokergym.env.utils import cards_pretty_str, join_player_ids
+from pokergym.env.utils import cards_pretty_str
 from pokergym.env.cards import WORST_RANK
-from rich.console import Console
+from typing import TYPE_CHECKING
 
-from deuces import evaluator
+from deuces import Evaluator
+
+if TYPE_CHECKING:
+    from pokergym.env.poker_logic import PokerGameState
 
 
 
-def terminal_render(env: "PokerEnv"):
-    state = env.game_state
-    agents = env.agents
-    eval = env.evaluator
+def terminal_render(state: "PokerGameState", eval: Evaluator=None) -> None:
+    eval = Evaluator() if eval is None else eval
     items = {
         "ID": (3, "^"),
         "Out": (3, "^"),
@@ -26,7 +26,7 @@ def terminal_render(env: "PokerEnv"):
         "Hand": (20, "<")
     }
     header = " | ".join([f"{item:^{width}}" for item, (width, _) in items.items()])
-    print(f"Round: {state.round_number}, Betting: {state.betting_round.name}, Pot: {state.pot}, Player: {state.current_idx}")
+    print(f"Round: {state.hand_number + 1}, Betting: {state.betting_round.name}, Pot: {state.pot}, Player: {state.current_idx}")
     print(f"Community Cards: {cards_pretty_str(state.community_cards)}")
     print(header)
     print("-" * len(header))
@@ -49,14 +49,14 @@ def terminal_render(env: "PokerEnv"):
         for item, (width,align) in items.items():
             if item == "ID":
                 id = f"{p.idx:{align}{width}}"
-                if p.idx == env.agent_selection:
+                if p.idx == state.current_idx:
                     line += make_green(id)
-                elif not p.idx in agents:
+                elif not p.active:
                     line += make_red(id)
                 else:
                     line += id
             elif item == "Out":
-                if not p.idx in agents or p.folded or p.all_in:
+                if not p.active or p.folded or p.all_in:
                     check = make_red(f"{'✓':{align}{width}}")
                 else:
                     check = f"{'✕':{align}{width}}"

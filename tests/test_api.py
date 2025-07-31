@@ -10,15 +10,15 @@ from pokergym.env.texas_holdem import env as PokerEnv
 
 SEEDS = [42, 123, 999, 2025]  # Check different seeds for randomness
 CONFIGS = [
-    PokerConfig(max_rounds=2),
-    PokerConfig(max_rounds=2, num_players=2),
-    PokerConfig(max_rounds=2, num_players=3),
-    PokerConfig(max_rounds=2, starting_stack=10_000),
-    PokerConfig(max_rounds=10),
-    PokerConfig(max_rounds=5),
-    PokerConfig(max_rounds=5, num_players=2),
-    PokerConfig(max_rounds=5, num_players=3),
-    PokerConfig(max_rounds=5, starting_stack=10_000),]
+    PokerConfig(max_hands=2),
+    PokerConfig(max_hands=2, num_players=2),
+    PokerConfig(max_hands=2, num_players=3),
+    PokerConfig(max_hands=2, starting_chips=10_000),
+    PokerConfig(max_hands=10),
+    PokerConfig(max_hands=5),
+    PokerConfig(max_hands=5, num_players=2),
+    PokerConfig(max_hands=5, num_players=3),
+    PokerConfig(max_hands=5, starting_chips=10_000),]
 
 
 @pytest.mark.parametrize("config", CONFIGS)
@@ -32,11 +32,11 @@ def test_petting_zoo_api(config, seed):
     assert res is None, "API test failed. Please check the environment implementation."
 
 if __name__ == "__main__":
-    import sys
-    pytest.main(sys.argv)
-    # import pdb
-    # try:
-    #     test_petting_zoo_api(CONFIGS[6], SEEDS[0])  # Run the test directly if this script is executed
-    # except Exception as e:      
-    #     print(f"An error occurred: {e}")
-    #     pdb.post_mortem()
+    # import sys
+    # pytest.main(sys.argv)
+    import pdb
+    try:
+        test_petting_zoo_api(CONFIGS[5], SEEDS[0])  # Run the test directly if this script is executed
+    except Exception as e:      
+        print(f"An error occurred: {e}")
+        pdb.post_mortem()

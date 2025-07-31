@@ -12,16 +12,19 @@ class RandomAgent(Agent):
         super().__init__(idx, action_space, observation_space)
         self.reasonable_raises = reasonable_raises
 
-    def act(self, observation, mask) -> Union[Action, Any]:
+    def act(self, observation, action_mask) -> Union[Action, Any]:
         """
         Randomly selects an action from the available action space.
         """
-        action = self.action_space.sample(mask=mask) 
+        if np.sum(action_mask["action"]) == 0:
+            return None
+        
+        action = self.action_space.sample(mask=action_mask) 
         if self.reasonable_raises and action == Action.RAISE:
-            min_raise = observation["action_mask"]["raise_amount"][0]
-            max_raise = observation["action_mask"]["raise_amount"][1]
+            min_raise = observation["action_mask"]["total_bet"][0]
+            max_raise = observation["action_mask"]["total_bet"][1]
             remaining_chips = observation["chip_counts"][0]
-            mean_raise = observation["action_mask"]["raise_amount"][0] + 0.1 * remaining_chips
+            mean_raise = observation["action_mask"]["total_bet"][0] + 0.1 * remaining_chips
             std_dev = (max_raise - min_raise) / 4  # Adjust the standard deviation as needed
-            action["raise_amount"] = np.clip(np.random.normal(mean_raise, std_dev), min_raise, max_raise)
+            action["total_bet"] = np.clip(np.random.normal(mean_raise, std_dev), min_raise, max_raise)
         return action
