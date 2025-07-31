@@ -24,23 +24,23 @@ def player_random_game(config, seed):
     print(f"Starting game with {len(agents)} agents, you are player {agents[-1].idx}.")
     prev_betting_round = BettingRound.PREFLOP
     for agent in env.agent_iter():
-        env.render()
+        # env.render()
         observation, reward, termination, truncation, info = env.last()
+        print(reward)
         action_mask = observation["action_mask"]
         if termination or truncation:
             action = None
         else:
             action = agents[agent].act(observation, action_mask)
         env.step(action)
-        print(
-            f"Player {agent}, action: {action_pretty_str(action, max_chips=env.MAX_CHIPS)}"
-        )
-        if agent == 0 and action is Action.PASS:
-            input("You passed. Press Enter to continue...")
-        if env.game_state.betting_round != prev_betting_round:
-            prev_betting_round = env.game_state.betting_round
-            input(f"New betting round: {prev_betting_round.name}. Press Enter to continue...")
-
+        # print(
+        #     f"Player {agent}, action: {action_pretty_str(action, max_chips=env.MAX_CHIPS)}"
+        # )
+        # if agent == 0 and action is Action.PASS:
+        #     input("You passed. Press Enter to continue...")
+        # if env.game_state.betting_round != prev_betting_round:
+        #     prev_betting_round = env.game_state.betting_round
+        #     input(f"New betting round: {prev_betting_round.name}. Press Enter to continue...")
 
     env.close()
 

@@ -41,3 +41,7 @@ class TestClass:
     def teardown_method(self, method):
         # This method is being called after each test case, and it will revert input back to original function
         human_module.input = input 
+
+if __name__ == "__main__":
+    import sys
+    pytest.main(sys.argv)

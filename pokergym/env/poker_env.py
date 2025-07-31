@@ -313,6 +313,16 @@ class raw_env(AECEnv, EzPickle):
                     "raise_amount": np.array([min_raise, max_raise], dtype=np.float32),
                 }
             }
+        elif len(players_in_hand) == 1 and player in players_in_hand:
+            # Essentially, when other active players folded before you got any turns. Pot will be uncontested, but you must call the current bet as you cannot earn more chips then you put in.
+            mask[Action.CALL.value] = True
+            return {
+                "action_mask": {
+                    "action": np.array(mask, dtype=np.int8),
+                    "raise_amount": np.array([min_raise, max_raise], dtype=np.float32),
+                }
+            }
+
 
         mask[Action.FOLD.value] = True  # Always allow folding
 
@@ -332,13 +342,13 @@ class raw_env(AECEnv, EzPickle):
         ## An all-in raise for less than a min-raise is also possible
         to_raise = self.game_state.current_bet - player.bet + self.config.min_raise
         if player.chips >= to_raise:
-            other_max = max(
-                [
+
+            other_max = [
                     p.bet + p.chips
                     for p in self.game_state.players
                     if (p.idx in self.agents) and not p.folded and p.idx != player.idx
-                ]
-            )
+                ] 
+            other_max = max(other_max) if other_max else 9e99
             if other_max != 0:
                 # If all other players are all-in or have no chips, there is no raise possible
                 mask[Action.RAISE.value] = True
@@ -374,16 +384,8 @@ class raw_env(AECEnv, EzPickle):
             self.terminations[self.agent_selection]
             or self.truncations[self.agent_selection]
         ):
-            # handles stepping an agent which is already dead
-            # accepts a None action for the one agent, and moves the agent_selection to
-            # the next dead agent,  or if there are no more dead agents, to the next live agent
             self._was_dead_step(action)
-            if self.agent_selection == self.game_state.current_idx:
-                self.game_state.current_idx = self.next_active_player_idx(
-                    self.agent_selection
-                )
-            self.agent_selection = self.next_active_player_idx(self.agent_selection)
-            # self.agent_selection = self._agent_selector.next()
+            self._next_step()
             return
 
         if self.game_state.betting_round == BettingRound.END:
@@ -395,21 +397,12 @@ class raw_env(AECEnv, EzPickle):
             ]
             if len(active_players) == 1 and self.agent_selection in active_players:
                 self.terminations[self.agent_selection] = True
-            if self.agent_selection == self.game_state.current_idx:
-                self.game_state.current_idx = self.next_active_player_idx(
-                    self.agent_selection
-                )
-            self.agent_selection = self.next_active_player_idx(self.agent_selection)
-
-            # self.agent_selection = self._agent_selector.next()
+            self._next_step()
             return
 
         # Take the Action
         _action = Action(action["action"])
         self._handle_action(player.idx, _action, action)
-
-        if player.idx == 5 and self.game_state.betting_round == BettingRound.TURN:
-            pass
 
         # Check if betting round is finished:
         active_players = [
@@ -426,28 +419,37 @@ class raw_env(AECEnv, EzPickle):
                     break
         if not round_over:
             raisers = [p.idx for p in active_players if p.last_action == Action.RAISE]
-            next_idk = self.next_active_player_idx(player.idx, check_termination=True)
-            if next_idk in raisers and len(raisers) == 1:
+            next_idx = self.next_active_player_idx(player.idx, check_termination=True)
+            if next_idx in raisers and len(raisers) == 1:
                 round_over = True
 
-        if len(active_players) == 1:
+        if len(active_players) == 1 and all([p.bet == self.game_state.current_bet is not None for p in active_players]):
             # Only one player remains, so skip to showdown
             while self.game_state.betting_round != BettingRound.SHOWDOWN:
                 self.step_round()
         elif round_over:
             self.step_round()
-        elif player.idx == self.game_state.current_idx:
-            # If not all players have acted, continue to the next player
-            self.game_state.current_idx = self.next_active_player_idx(player.idx)
+
 
         if self.game_state.betting_round == BettingRound.SHOWDOWN:
             self.end_round()
             if self.game_state.betting_round == BettingRound.START:
                 self.start_round()
+            self.agent_selection = self.next_active_player_idx(self.agent_selection)
 
-        self.agent_selection = self.next_active_player_idx(self.agent_selection)
-        # self.agent_selection = self._agent_selector.next()
+        # TODO: Add infos
+        # self.infos[self.agent_selection] = {}
+
+        self._next_step()
         return
+
+    def _next_step(self):
+        if self.agent_selection == self.game_state.current_idx:
+            self.game_state.current_idx = self.next_active_player_idx(
+                self.agent_selection
+            )
+        self.agent_selection = self.next_active_player_idx(self.agent_selection)
+        self._clear_rewards()
 
     def _handle_action(self, agent: int, action_enum: Action, action: Dict):
         """
@@ -473,13 +475,12 @@ class raw_env(AECEnv, EzPickle):
             # Convert normalized raise amount to absolute chips
             extra_bet = action.get("raise_amount", 0.0)
             extra_chips = round(extra_bet * self.MAX_CHIPS)
-            other_max = max(
-                [
+            other_max = [
                     p.bet + p.chips
                     for p in self.game_state.players
-                    if p.idx in self.agents and not p.folded and p.idx != player.idx
-                ]
-            )
+                    if (p.idx in self.agents) and not p.folded and p.idx != player.idx
+                ] 
+            other_max = max(other_max) if other_max else 9e99
             min_bet = self.game_state.current_bet + self.config.min_raise
             min_bet = min(min_bet, other_max)
             assert (
@@ -616,6 +617,19 @@ class raw_env(AECEnv, EzPickle):
         assert (
             self.game_state.pot == 0
         ), f"Pot not fully distributed, remaining: {self.game_state.pot}"
+
+        # Give rewards
+        for p in self.agents:
+            if p in self.terminations or p in self.truncations:
+                continue
+            chips = self.game_state.players[p].chips
+            self.rewards[p] = (
+                chips - self.config.starting_stack
+            ) / self.config.starting_stack
+            self._cumulative_rewards[p] += self.rewards[p]
+            # print(
+            #     f"Player {p.idx} reward: {self.rewards[p.idx]} (Chips: {p.chips}, Starting Stack: {self.config.starting_stack})"
+            # )
 
         # Remove Players who are out of chips
         active_count = self.config.num_players
@@ -843,5 +857,5 @@ if __name__ == "__main__":
         seed: Optional[int] = 0  # Default seed value
 
     args = tyro.cli(ExtraArgs)
-    env = PokerEnv(config=args.config, seed=args.seed)
+    _env = env(config=args.config, seed=args.seed)
     print(f"Environment: {env}")

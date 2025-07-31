@@ -30,3 +30,13 @@ def test_petting_zoo_api(config, seed):
     env = PokerEnv(config=config, seed=seed)
     res = api_test(env, num_cycles=config.num_players * 10_000, verbose_progress=True)
     assert res is None, "API test failed. Please check the environment implementation."
+
+if __name__ == "__main__":
+    import sys
+    pytest.main(sys.argv)
+    # import pdb
+    # try:
+    #     test_petting_zoo_api(CONFIGS[6], SEEDS[0])  # Run the test directly if this script is executed
+    # except Exception as e:      
+    #     print(f"An error occurred: {e}")
+    #     pdb.post_mortem()

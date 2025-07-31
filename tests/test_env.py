@@ -88,23 +88,17 @@ def test_fixed_game(config: PokerConfig, options, seed): #, outcome):
     env.render_mode = "terminal"
     prev_round = -1
     for agent in env.agent_iter():
-        env.render()
         observation, reward, termination, truncation, info = env.last()
         action_mask = observation["action_mask"]
         if termination or truncation:
             action = None
         else:
             action = env.action_space(agent).sample(mask=action_mask)
-        print(
-            f"Player {agent}, action: {action_pretty_str(action, max_chips=env.MAX_CHIPS)}"
-        )
         env.step(action)
         if env.game_state.round_number != prev_round:
             prev_round = env.game_state.round_number
             sanity_checks(env, config)
     sanity_checks(env, config)
-
-
     env.close()
 
 
@@ -154,6 +148,8 @@ def test_random_game(config, seed):
         for i in range(config.num_players)
     ]
     prev_round = -1
+    env.render()
+
     for agent in env.agent_iter():
         observation, reward, termination, truncation, info = env.last()
         action_mask = observation["action_mask"]
@@ -162,6 +158,12 @@ def test_random_game(config, seed):
         else:
             action = agents[agent].act(observation, action_mask)
         env.step(action)
+        print(
+            f"Player {agent}, action: {action_pretty_str(action, max_chips=env.MAX_CHIPS)}"
+        )
+        env.render()
+
+
         if env.game_state.round_number != prev_round:
             prev_round = env.game_state.round_number
             sanity_checks(env, config)
@@ -223,3 +225,12 @@ def sanity_checks(env: PokerEnv, config: PokerConfig):
         len(env.game_state.players) == config.num_players
     ), f"Number of players mismatch: expected {config.num_players}, got {len(env.game_state.players)}"
 
+if __name__ == "__main__":
+    # import sys
+    # pytest.main(sys.argv)
+    import pdb
+    try:
+        test_random_game(CONFIGS[4], SEEDS[2])  # Run the test directly if this script is executed
+    except Exception as e:      
+        print(f"An error occurred: {e}")
+        pdb.post_mortem()
