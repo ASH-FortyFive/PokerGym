@@ -1,20 +1,20 @@
 import functools
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
-from deuces import Card, Deck, Evaluator
+from deuces import Card, Evaluator
 from gymnasium.spaces import Box, Dict, Discrete, MultiBinary, MultiDiscrete
+from gymnasium.utils import EzPickle
 from pettingzoo import AECEnv
-from pettingzoo.utils import AgentSelector, wrappers
+from pettingzoo.utils import wrappers
 
-from pokergym.env.cards import WORST_RANK, SeededDeck, card_to_int
+from pokergym.env.cards import SeededDeck, card_to_int
 from pokergym.env.config import PokerConfig
 from pokergym.env.custom_spaces import MaskableBox
 from pokergym.env.enums import Action, BettingRound
 from pokergym.env.player import Player
-from pokergym.env.utils import cards_pretty_str, join_player_ids
 from pokergym.visualise.terminal_vis import terminal_render
 
 
@@ -62,20 +62,33 @@ class PokerGameState:
         self.reset_for_new_hand()
 
 
-class PokerEnv(AECEnv):
+def env(**kwargs):
+    env = raw_env(**kwargs)
+    # env = wrappers.TerminateIllegalWrapper(env, illegal_reward=-1)
+    env = wrappers.AssertOutOfBoundsWrapper(env)
+    env = wrappers.OrderEnforcingWrapper(env)
+    return env
+
+
+class raw_env(AECEnv, EzPickle):
     metadata = {
         "name": "PokerEnv_v0",
         "render_modes": ["terminal"],
     }
 
     def __init__(self, config: PokerConfig = PokerConfig(), seed: Optional[int] = None):
-        super(PokerEnv, self).__init__()
+        EzPickle.__init__(self, config, seed)
+        super().__init__()
 
         self.config = config
+        self.render_mode = config.render_mode
         self.seed = seed
         self.np_random = np.random.default_rng(seed)
-        self.first_dealer = config.first_dealer if config.first_dealer is not None else self.np_random.integers(0, config.num_players - 1)
-
+        self.first_dealer = (
+            config.first_dealer
+            if config.first_dealer is not None
+            else self.np_random.integers(0, config.num_players - 1)
+        )
 
         # Initialize the game state
         self.game_state = PokerGameState(

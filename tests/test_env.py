@@ -13,7 +13,7 @@ from pokergym.agents import (
 from pokergym.env.cards import SeededDeck, card_to_int
 from pokergym.env.config import PokerConfig
 from pokergym.env.enums import Action, BettingRound
-from pokergym.env.poker_env import PokerEnv
+from pokergym.env.texas_holdem import env as PokerEnv
 from pokergym.env.utils import (
     action_mask_pretty_str,
     action_pretty_str,

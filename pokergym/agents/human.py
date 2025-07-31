@@ -25,13 +25,13 @@ class HumanAgent(Agent):
         while True:
             user_input = input(question).strip().lower()
             if user_input == "fold" and mask[Action.FOLD.value]:
-                return Action.FOLD
+                return Action.FOLD.value
             elif user_input == "check" and mask[Action.CHECK.value]:
-                return Action.CHECK
+                return Action.CHECK.value
             elif user_input == "raise" and mask[Action.RAISE.value]:
-                return Action.RAISE
+                return Action.RAISE.value
             elif user_input == "call" and mask[Action.CALL.value]:
-                return Action.CALL
+                return Action.CALL.value
             print(
                 f"Invalid action. Must be one of: {', '.join(options)}. Please try again."
             )
@@ -69,17 +69,17 @@ class HumanAgent(Agent):
             except ValueError:
                 print("Please enter a valid integer for the raise amount.")
 
-    def act(self, observation: Any, action_mask: dict) -> Action:
+    def act(self, observation: Any, action_mask: dict) -> dict:
         mask = action_mask["action"]
         raise_mask = action_mask["raise_amount"]
         action = {
-            "action": Action.PASS,
-            "raise_amount": [0],  # No raise amount since we are folding
+            "action": Action.PASS.value,
+            "raise_amount": 0.0,  # No raise amount since we are folding
         }
         if mask[Action.PASS.value]:  # Must pass
             pass
         else:
-            action["action"] = self.get_valid_action(mask)
-            if action["action"] == Action.RAISE:
+            action["action"] = np.array(self.get_valid_action(mask))
+            if action["action"] == Action.RAISE.value:
                 action["raise_amount"] = self.get_valid_raise(raise_mask)
         return action

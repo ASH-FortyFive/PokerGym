@@ -6,7 +6,7 @@ import pytest
 from pettingzoo.test import api_test
 
 from pokergym.env.config import PokerConfig
-from pokergym.env.poker_env import PokerEnv
+from pokergym.env.texas_holdem import env as PokerEnv
 
 SEEDS = [42, 123, 999, 2025]  # Check different seeds for randomness
 CONFIGS = [

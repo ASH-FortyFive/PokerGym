@@ -2,9 +2,10 @@
 from pokergym.agents import (
     HumanAgent,
     RandomAgent,
+    FoldAgent,
 )
 from pokergym.env.enums import Action, BettingRound
-from pokergym.env.poker_env import PokerEnv
+from pokergym.env.texas_holdem import env as PokerEnv
 from pokergym.env.utils import action_pretty_str
 
 def player_random_game(config, seed):
@@ -13,12 +14,12 @@ def player_random_game(config, seed):
     """
     env = PokerEnv(config=config, seed=seed)
     env.reset(seed=seed)
-    env.render_mode = "terminal"
     agents = [
         RandomAgent(idx=i+1, action_space=env.action_space(i))
         for i in range(config.num_players - 1)
     ]
-    agents.append(HumanAgent(idx=0, action_space=env.action_space(config.num_players - 1)))
+    # agents.append(HumanAgent(idx=0, action_space=env.action_space(config.num_players - 1), max_chips=env.MAX_CHIPS))
+    agents.append(FoldAgent(idx=0, action_space=env.action_space(config.num_players - 1)))
     agents = sorted(agents, key=lambda x: x.idx)
     print(f"Starting game with {len(agents)} agents, you are player {agents[-1].idx}.")
     prev_betting_round = BettingRound.PREFLOP

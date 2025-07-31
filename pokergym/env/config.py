@@ -22,6 +22,8 @@ class PokerConfig:
         BettingRound.RIVER: 1
     })
 
+    render_mode: str = "terminal"
+
     # Possibly allow for dynamic betting rounds
     # round_progression: dict[BettingRound, BettingRound] = field(default_factory=lambda: {
     #     BettingRound.START: BettingRound.PREFLOP,

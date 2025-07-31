@@ -19,13 +19,13 @@ class FoldAgent(Agent):
     def act(self, observation: Any, action_mask: dict) -> Action:
         mask = action_mask["action"]
         action = {
-            "action": Action.PASS,
-            "raise_amount": [0]  # No raise amount since we are folding
+            "action": Action.PASS.value,
+            "raise_amount": 0.0 
         }
         if mask[Action.PASS.value]: # Must pass
             pass
         elif mask[Action.FOLD.value]: # Must fold
-            action["action"] = Action.FOLD
+            action["action"] = Action.FOLD.value
         else:
             raise ValueError(f"No valid action available for {self.__class__.__name__}.")
         return action
@@ -45,15 +45,15 @@ class CheckAgent(Agent):
     def act(self, observation: Any, action_mask: dict) -> Action:
         mask = action_mask["action"]
         action = {
-            "action": Action.PASS,
-            "raise_amount": [0]  # No raise amount since we are folding
+            "action": Action.PASS.value,
+            "raise_amount": 0.0 
         }
         if mask[Action.PASS.value]: # Must pass
             pass
         elif mask[Action.CHECK.value]: # Must check
-            action["action"] = Action.CHECK
+            action["action"] = Action.CHECK.value
         elif mask[Action.FOLD.value]: # Must fold
-            action["action"] = Action.FOLD
+            action["action"] = Action.FOLD.value
         else:
             raise ValueError(f"No valid action available for {self.__class__.__name__}.")
         return action
@@ -74,17 +74,17 @@ class CallAgent(Agent):
     def act(self, observation: Any, action_mask: dict) -> Action:
         mask = action_mask["action"]
         action = {
-            "action": Action.PASS,
-            "raise_amount": [0]  # No raise amount since we are folding
+            "action": Action.PASS.value,
+            "raise_amount": 0.0 
         }
         if mask[Action.PASS.value]: # Must pass
             pass
         elif mask[Action.CALL.value]: # Must call
-            action["action"] = Action.CALL
+            action["action"] = Action.CALL.value
         elif mask[Action.CHECK.value]: # Must check
-            action["action"] = Action.CHECK
+            action["action"] = Action.CHECK.value
         elif mask[Action.FOLD.value]: # Must fold
-            action["action"] = Action.FOLD
+            action["action"] = Action.FOLD.value
         else:
             raise ValueError(f"No valid action available for {self.__class__.__name__}.")
         return action
@@ -108,23 +108,23 @@ class RaiseAgent(Agent):
     def act(self, observation: Any, action_mask: dict) -> Action:
         mask = action_mask["action"]
         action = {
-            "action": Action.PASS,
-            "raise_amount": [0]  # No raise amount since we are folding
+            "action": Action.PASS.value,
+            "raise_amount": 0.0 
         }
         if mask[Action.PASS.value]: # Must pass
             pass
         elif mask[Action.RAISE.value]: # Must raise
-            action["action"] = Action.RAISE
+            action["action"] = Action.RAISE.value
             raise_mask = action_mask["raise_amount"]
             if self.fixed_raise is not None:
                 raise_mask[1] = min(raise_mask[1], self.fixed_raise)
             action["raise_amount"] = self.action_space["raise_amount"].sample(mask=raise_mask)
         elif mask[Action.CALL.value]: # Must call
-            action["action"] = Action.CALL
+            action["action"] = Action.CALL.value
         elif mask[Action.CHECK.value]: # Must check
-            action["action"] = Action.CHECK
+            action["action"] = Action.CHECK.value
         elif mask[Action.FOLD.value]: # Must fold
-            action["action"] = Action.FOLD
+            action["action"] = Action.FOLD.value
         else:
             raise ValueError(f"No valid action available for {self.__class__.__name__}.")
         return action

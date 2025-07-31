@@ -1,7 +1,6 @@
 from typing import Any, Union
 from pokergym.agents.base import Agent
 from pokergym.env.enums import Action
-
 import numpy as np
 
 class RandomAgent(Agent):
@@ -17,7 +16,7 @@ class RandomAgent(Agent):
         """
         Randomly selects an action from the available action space.
         """
-        action = self.action_space.sample(mask=mask)
+        action = self.action_space.sample(mask=mask) 
         if self.reasonable_raises and action == Action.RAISE:
             min_raise = observation["action_mask"]["raise_amount"][0]
             max_raise = observation["action_mask"]["raise_amount"][1]
