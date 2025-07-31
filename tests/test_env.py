@@ -23,12 +23,12 @@ from pokergym.env.utils import (
 SEEDS = [42, 0, 100]
 CONFIGS = [
     PokerConfig(max_rounds=2),
-    PokerConfig(max_rounds=2, num_players=2),
+    PokerConfig(max_rounds=2, num_players=2,first_dealer=1),
     PokerConfig(max_rounds=2, num_players=3),
     PokerConfig(max_rounds=2, starting_stack=10_000),
     PokerConfig(max_rounds=10),
-    PokerConfig(max_rounds=5),
-    PokerConfig(max_rounds=5, num_players=2),
+    PokerConfig(max_rounds=5, first_dealer=None),
+    PokerConfig(max_rounds=5, num_players=2, first_dealer=0),
     PokerConfig(max_rounds=5, num_players=3),
     PokerConfig(max_rounds=5, starting_stack=10_000),]
 
@@ -145,6 +145,10 @@ def test_random_game(config, seed):
     env = PokerEnv(config=config, seed=seed)
     env.reset(seed=seed)
     env.render_mode = "terminal"
+    assert env.game_state.dealer_idx == config.first_dealer if config.first_dealer is not None else True, f"Dealer index should be set correctly. Wanted {config.first_dealer}, got {env.game_state.dealer_idx}"
+    assert env.game_state.round_number == 0, f"Round number should start at 0. Got {env.game_state.round_number}"
+    assert len(env.game_state.players) == config.num_players, f"Number of players should be {config.num_players}. Got {len(env.game_state.players)}"
+    sanity_checks(env, config)
     agents = [
         RandomAgent(idx=i, action_space=env.action_space(i))
         for i in range(config.num_players)
@@ -164,6 +168,46 @@ def test_random_game(config, seed):
     sanity_checks(env, config)
     env.close()
 
+
+@pytest.mark.parametrize("config", CONFIGS)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_rules_game(config, seed):
+    """
+    Test a game with bots that sample moves randomly.
+    """
+    np.random.seed(seed)
+    env = PokerEnv(config=config, seed=seed)
+    env.reset(seed=seed)
+    env.render_mode = "terminal"
+    assert env.game_state.dealer_idx == config.first_dealer if config.first_dealer is not None else True, f"Dealer index should be set correctly. Wanted {config.first_dealer}, got {env.game_state.dealer_idx}"
+    assert env.game_state.round_number == 0, f"Round number should start at 0. Got {env.game_state.round_number}"
+    assert len(env.game_state.players) == config.num_players, f"Number of players should be {config.num_players}. Got {len(env.game_state.players)}"
+    sanity_checks(env, config)
+    agent_options = [RaiseAgent, CallAgent, CheckAgent, FoldAgent, RandomAgent]
+    # Sample randomly from the agent options
+    agents = [
+        agent_options[np.random.randint(len(agent_options))](
+            idx=i, action_space=env.action_space(i)
+        ) for i in range(config.num_players)
+    ]
+    for agent in agents:
+        if isinstance(agent, RandomAgent):
+            agent.reasonable_raises = np.random.choice([True, False])
+
+    prev_round = -1
+    for agent in env.agent_iter():
+        observation, reward, termination, truncation, info = env.last()
+        action_mask = observation["action_mask"]
+        if termination or truncation:
+            action = None
+        else:
+            action = agents[agent].act(observation, action_mask)
+        env.step(action)
+        if env.game_state.round_number != prev_round:
+            prev_round = env.game_state.round_number
+            sanity_checks(env, config)
+    sanity_checks(env, config)
+    env.close()
 
 def sanity_checks(env: PokerEnv, config: PokerConfig):
     """Ensure the environment is in a valid state functioning correctly."""

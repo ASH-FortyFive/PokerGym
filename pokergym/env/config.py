@@ -14,6 +14,7 @@ class PokerConfig:
     min_bet: Optional[int] = None # None menas no forced minimum bet
     max_bet: Optional[int] = None # None means no limit
     min_raise: int = 20
+    first_dealer: Optional[int] = 0 # None is random
 
     cards_per_round: dict[BettingRound, int] = field(default_factory=lambda: {
         BettingRound.FLOP: 3,

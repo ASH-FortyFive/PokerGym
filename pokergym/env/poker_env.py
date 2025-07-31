@@ -23,6 +23,7 @@ class PokerGameState:
     players: List[Player] = field(default_factory=list)
     community_cards: List[Card] = field(default_factory=list)
     pot: int = 0
+    first_dealer: int = 0
     current_idx: int = 0
     dealer_idx: int = 0
     bb_idx: int = 0
@@ -53,7 +54,7 @@ class PokerGameState:
         """
         self.betting_round = BettingRound.START
         self.round_number = 0
-        self.dealer_idx = 0
+        self.dealer_idx = self.first_dealer
         self.deck = SeededDeck(seed) if seed is not None else SeededDeck()
         self.players = [
             Player(idx=i, _chips=self.stack_size) for i in range(self.num_players)
@@ -72,11 +73,15 @@ class PokerEnv(AECEnv):
 
         self.config = config
         self.seed = seed
+        self.np_random = np.random.default_rng(seed)
+        self.first_dealer = config.first_dealer if config.first_dealer is not None else self.np_random.integers(0, config.num_players - 1)
+
 
         # Initialize the game state
         self.game_state = PokerGameState(
             stack_size=config.starting_stack,
             num_players=config.num_players,
+            first_dealer=self.first_dealer,
         )
         self.MAX_CHIPS = self.config.starting_stack * self.config.num_players
         self.evaluator = Evaluator()
@@ -127,7 +132,6 @@ class PokerEnv(AECEnv):
             self.agents
         )  # Start with a fixed agent for testing
 
-        print(options, type(options))
         self._cards = options.get("cards", {}) if options else {}
         self.start_round()
 
