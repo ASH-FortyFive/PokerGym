@@ -1,5 +1,5 @@
 import pytest
-from pokergym.env.poker_logic import PokerLogic, PokerGameState
+from pokergym.env.poker_logic import Poker, PokerGameState
 
 STATE_1 = PokerGameState(1_000, 6, 0, 42)
 STATES = [STATE_1]

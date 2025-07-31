@@ -257,6 +257,8 @@ class Poker:
                 assert (
                     len(cards) == self.config.max_hand_cards
                 ), f"Player {p_idx} must receive at most {self.config.max_hand_cards} cards."
+                if p_idx >= len(self.game_state.players):
+                    continue  # Skip if player index is out of range
                 p = self.game_state.players[p_idx]
                 if not p.active:
                     continue

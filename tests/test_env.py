@@ -22,15 +22,15 @@ from pokergym.env.utils import (
 
 SEEDS = [42, 0, 100]
 CONFIGS = [
-    PokerConfig(max_rounds=2),
-    PokerConfig(max_rounds=2, num_players=2,first_dealer=1),
-    PokerConfig(max_rounds=2, num_players=3),
-    PokerConfig(max_rounds=2, starting_stack=10_000),
-    PokerConfig(max_rounds=10),
-    PokerConfig(max_rounds=5, first_dealer=None),
-    PokerConfig(max_rounds=5, num_players=2, first_dealer=0),
-    PokerConfig(max_rounds=5, num_players=3),
-    PokerConfig(max_rounds=5, starting_stack=10_000),]
+    PokerConfig(max_hands=2),
+    PokerConfig(max_hands=2, num_players=2,first_dealer=1),
+    PokerConfig(max_hands=2, num_players=3),
+    PokerConfig(max_hands=2, starting_chips=10_000),
+    PokerConfig(max_hands=10),
+    PokerConfig(max_hands=5, first_dealer=None),
+    PokerConfig(max_hands=5, num_players=2, first_dealer=0),
+    PokerConfig(max_hands=5, num_players=3),
+    PokerConfig(max_hands=5, starting_chips=10_000),]
 
 # Format for fixing cards
 OPTIONS = [
@@ -95,8 +95,8 @@ def test_fixed_game(config: PokerConfig, options, seed): #, outcome):
         else:
             action = env.action_space(agent).sample(mask=action_mask)
         env.step(action)
-        if env.game_state.round_number != prev_round:
-            prev_round = env.game_state.round_number
+        if env.poker.game_state.hand_number != prev_round:
+            prev_round = env.poker.game_state.hand_number
             sanity_checks(env, config)
     sanity_checks(env, config)
     env.close()
@@ -112,7 +112,7 @@ def test_fold_game(config: PokerConfig, seed):
     env.reset(seed=seed)
     env.render_mode = "terminal"
     agents = [
-        FoldAgent(idx=i, action_space=env.action_space(i))
+        FoldAgent(idx=i, action_space=env.action_space(env.inv_agent_name_mapping[i]))
         for i in range(config.num_players)
     ]
     prev_round = -1
@@ -122,10 +122,11 @@ def test_fold_game(config: PokerConfig, seed):
         if termination or truncation:
             action = None
         else:
-            action = agents[agent].act(observation, action_mask)
+            agent_idx = env.agent_name_mapping[agent]
+            action = agents[agent_idx].act(observation, action_mask)
         env.step(action)
-        if env.game_state.round_number != prev_round:
-            prev_round = env.game_state.round_number
+        if env.poker.game_state.hand_number != prev_round:
+            prev_round = env.poker.game_state.hand_number
             sanity_checks(env, config)
     sanity_checks(env, config)
     env.close()
@@ -139,12 +140,12 @@ def test_random_game(config, seed):
     env = PokerEnv(config=config, seed=seed)
     env.reset(seed=seed)
     env.render_mode = "terminal"
-    assert env.game_state.dealer_idx == config.first_dealer if config.first_dealer is not None else True, f"Dealer index should be set correctly. Wanted {config.first_dealer}, got {env.game_state.dealer_idx}"
-    assert env.game_state.round_number == 0, f"Round number should start at 0. Got {env.game_state.round_number}"
-    assert len(env.game_state.players) == config.num_players, f"Number of players should be {config.num_players}. Got {len(env.game_state.players)}"
+    assert env.poker.game_state.dealer_idx == config.first_dealer if config.first_dealer is not None else True, f"Dealer index should be set correctly. Wanted {config.first_dealer}, got {env.poker.game_state.dealer_idx}"
+    assert env.poker.game_state.hand_number == 0, f"Round number should start at 0. Got {env.poker.game_state.hand_number}"
+    assert len(env.poker.game_state.players) == config.num_players, f"Number of players should be {config.num_players}. Got {len(env.poker.game_state.players)}"
     sanity_checks(env, config)
     agents = [
-        RandomAgent(idx=i, action_space=env.action_space(i))
+        RandomAgent(idx=i, action_space=env.action_space(env.inv_agent_name_mapping[i]))
         for i in range(config.num_players)
     ]
     prev_round = -1
@@ -156,16 +157,17 @@ def test_random_game(config, seed):
         if termination or truncation:
             action = None
         else:
-            action = agents[agent].act(observation, action_mask)
+            agent_idx = env.agent_name_mapping[agent]
+            action = agents[agent_idx].act(observation, action_mask)
         env.step(action)
         print(
-            f"Player {agent}, action: {action_pretty_str(action, max_chips=env.MAX_CHIPS)}"
+            f"Player {agent}, action: {action_pretty_str(action)}"
         )
         env.render()
 
 
-        if env.game_state.round_number != prev_round:
-            prev_round = env.game_state.round_number
+        if env.poker.game_state.hand_number != prev_round:
+            prev_round = env.poker.game_state.hand_number
             sanity_checks(env, config)
     sanity_checks(env, config)
     env.close()
@@ -181,15 +183,15 @@ def test_rules_game(config, seed):
     env = PokerEnv(config=config, seed=seed)
     env.reset(seed=seed)
     env.render_mode = "terminal"
-    assert env.game_state.dealer_idx == config.first_dealer if config.first_dealer is not None else True, f"Dealer index should be set correctly. Wanted {config.first_dealer}, got {env.game_state.dealer_idx}"
-    assert env.game_state.round_number == 0, f"Round number should start at 0. Got {env.game_state.round_number}"
-    assert len(env.game_state.players) == config.num_players, f"Number of players should be {config.num_players}. Got {len(env.game_state.players)}"
+    assert env.poker.game_state.dealer_idx == config.first_dealer if config.first_dealer is not None else True, f"Dealer index should be set correctly. Wanted {config.first_dealer}, got {env.poker.game_state.dealer_idx}"
+    assert env.poker.game_state.hand_number == 0, f"Round number should start at 0. Got {env.poker.game_state.hand_number}"
+    assert len(env.poker.game_state.players) == config.num_players, f"Number of players should be {config.num_players}. Got {len(env.poker.game_state.players)}"
     sanity_checks(env, config)
     agent_options = [RaiseAgent, CallAgent, CheckAgent, FoldAgent, RandomAgent]
     # Sample randomly from the agent options
     agents = [
         agent_options[np.random.randint(len(agent_options))](
-            idx=i, action_space=env.action_space(i)
+            idx=i, action_space=env.action_space(env.inv_agent_name_mapping[i])
         ) for i in range(config.num_players)
     ]
     for agent in agents:
@@ -203,27 +205,28 @@ def test_rules_game(config, seed):
         if termination or truncation:
             action = None
         else:
-            action = agents[agent].act(observation, action_mask)
+            agent_idx = env.agent_name_mapping[agent]
+            action = agents[agent_idx].act(observation, action_mask)
         env.step(action)
-        if env.game_state.round_number != prev_round:
-            prev_round = env.game_state.round_number
+        if env.poker.game_state.hand_number != prev_round:
+            prev_round = env.poker.game_state.hand_number
             sanity_checks(env, config)
     sanity_checks(env, config)
     env.close()
 
 def sanity_checks(env: PokerEnv, config: PokerConfig):
     """Ensure the environment is in a valid state functioning correctly."""
-    total_chips = config.num_players * config.starting_stack
+    total_chips = config.num_players * config.starting_chips
     total_chips_in_state = 0
-    total_chips_in_state += sum(player.chips for player in env.game_state.players)
-    total_chips_in_state += sum(player.bet for player in env.game_state.players)
-    total_chips_in_state += env.game_state.pot
+    total_chips_in_state += sum(player.chips for player in env.poker.game_state.players)
+    total_chips_in_state += sum(player.bet for player in env.poker.game_state.players)
+    total_chips_in_state += env.poker.game_state.pot
     assert (
         total_chips == total_chips_in_state
     ), f"Total chips mismatch: expected {total_chips}, got {total_chips_in_state}"
     assert (
-        len(env.game_state.players) == config.num_players
-    ), f"Number of players mismatch: expected {config.num_players}, got {len(env.game_state.players)}"
+        len(env.poker.game_state.players) == config.num_players
+    ), f"Number of players mismatch: expected {config.num_players}, got {len(env.poker.game_state.players)}"
 
 if __name__ == "__main__":
     # import sys
