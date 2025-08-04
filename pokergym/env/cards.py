@@ -31,6 +31,22 @@ class SeededDeck(Deck):
     def __len__(self):
         return len(self.cards)
 
+    def __eq__(self, other):
+        """Check equality with another SeededDeck."""
+        if not isinstance(other, SeededDeck):
+            return False
+        return self.cards == other.cards    
+
+    @classmethod
+    def from_cards(cls, deck):
+        """Create a SeededDeck from a list of deuces Card objects.
+        Args:
+            deck: A list of deuces Card objects to initialize the deck.
+        """
+        instance = cls()
+        instance.cards = deck
+        return instance
+
 def card_to_int(card: Card) -> int:
     """Convert a deuces Card to low dim integer representation.
     0 is no card, 1-52 are the cards.
@@ -63,3 +79,17 @@ def int_to_card(card_int: int) -> Card:
     rank = (card_int - 1) % 13
     suit = (card_int - 1) // 13
     return Card.new(f"{Card.int_to_rank(rank)}{Card.int_to_suit(suit)}")    
+
+def card_to_str(card: Card) -> str:
+    """Convert a deuces Card to its string representation.
+    Args:
+        card: The deuces Card object to convert.
+    Returns:
+        A string representation of the card, or an empty string if card is None.
+    """
+    suit_int = Card.get_suit_int(card)
+    rank_int = Card.get_rank_int(card)
+    suit_str = Card.INT_SUIT_TO_CHAR_SUIT[suit_int]
+    rank_str = Card.STR_RANKS[rank_int]
+    string = f"{rank_str}{suit_str}"
+    return string

@@ -8,7 +8,7 @@ from numpy.typing import NDArray
 from pokergym.env.cards import WORST_RANK, SeededDeck
 from pokergym.env.config import PokerConfig
 from pokergym.env.enums import Action, BettingRound
-from pokergym.env.player import Player
+from pokergym.env.states import PlayerState, PokerGameState
 from pokergym.env.utils import action_pretty_str
 from pokergym.visualise.terminal_vis import terminal_render
 
@@ -16,85 +16,6 @@ from pokergym.visualise.terminal_vis import terminal_render
 class ActionDict(TypedDict):
     action: Set[Action]
     total_bet: NDArray[np.int32]
-
-
-@dataclass
-class PokerGameState:
-    """Dataclass to hold the state of a poker game.
-    This encapsulates all essential game state information, including player details,
-    betting status, community cards, and deck state, providing a comprehensive snapshot
-    of the game at any point.
-    Attributes:
-        num_players (int): Total number of players in the game.
-        starting_stack (int): Initial chip stack assigned to each player.
-        first_dealer (Optional[int]): Index of the first dealer; randomly set if None.
-        seed (Optional[int]): Seed for random number generation, ensuring reproducibility.
-        current_idx (int): Index of the player whose turn it is to act.
-        dealer_idx (int): Index of the current dealer.
-        current_bet (int): Highest bet placed in the current betting round.
-        pot (int): Total chips accumulated in the pot.
-        betting_round (BettingRound): Current stage of the hand (e.g., PREFLOP, FLOP).
-        hand_number (int): Number of hands played in the game so far.
-        deck (SeededDeck): Deck of cards used for drawing, optionally seeded.
-        players (List[Player]): List of player objects representing all participants.
-        community_cards (List[Card]): List of community cards currently on the table.
-    """
-
-    # Game State
-    num_players: int = 0
-    starting_stack: int = 0
-    first_dealer: Optional[int] = None
-    seed: Optional[int] = None
-    current_idx: int = 0
-    dealer_idx: int = 0
-    current_bet: int = 0
-    pot: int = 0
-    betting_round: BettingRound = BettingRound.START
-    hand_number: int = 0
-    deck: SeededDeck = field(default_factory=SeededDeck)
-    players: List[Player] = field(default_factory=list)
-    community_cards: List[Card] = field(default_factory=list)
-
-    def __post_init__(self):
-        """Post-initialization method to set up the game state.
-        If `first_dealer` is not specified, it is randomly selected from the range of player
-        indices using the provided seed (if any). Sets `dealer_idx` to this value.
-        """
-        if self.first_dealer is None:
-            self.first_dealer = np.random.default_rng(self.seed).integers(
-                0, self.num_players - 1
-            )
-        self.dealer_idx = self.first_dealer
-
-    def reset_for_new_hand(self):
-        """Reset the game state to prepare for a new hand.
-        Clears community cards, resets the pot and current bet to zero, shuffles the deck,
-        and resets each player's hand and betting state for the new hand.
-        """
-        self.community_cards = []
-        self.pot = 0
-        self.current_bet = 0
-        self.deck.shuffle()
-        for player in self.players:
-            player.reset_for_new_hand()
-
-    def reset(self, seed: Optional[int] = None):
-        """Fully reset the game state to start a new game.
-        Sets the betting round to START, resets the hand number to zero, reinitializes the
-        dealer index to the first dealer, creates a new deck (seeded if `seed` is provided),
-        instantiates new player objects with the starting stack, and calls `reset_for_new_hand`.
-        Args:
-            seed (Optional[int]): Seed for the deck’s random number generator, if provided.
-        """
-        self.betting_round = BettingRound.START
-        self.hand_number = 0
-        self.dealer_idx = self.first_dealer
-        self.deck = SeededDeck(seed) if seed is not None else SeededDeck()
-        self.players = [
-            Player(_idx=i, _chips=self.starting_stack) for i in range(self.num_players)
-        ]
-        self.reset_for_new_hand()
-
 
 class Poker:
     def __init__(
@@ -142,7 +63,7 @@ class Poker:
         return
 
     # Action Methods
-    def legal_actions(self, player: Player = None, idx: int = None) -> ActionDict:
+    def legal_actions(self, player: PlayerState = None, idx: int = None) -> ActionDict:
         """Determine the legal actions available to the specified player in the current game state.
         Returns an `ActionDict` containing a set of possible actions and, for RAISE, a range of allowed
         total bet amounts. Ensures the player is the current actor.
@@ -165,7 +86,7 @@ class Poker:
             action=set(), total_bet=np.array([0, 0], dtype=np.int32)
         )
         if player.idx != self.game_state.current_idx:
-            print(f"Player {player.idx} is not the current player. Current player is {self.game_state.current_idx}.")
+            # print(f"Player {player.idx} is not the current player. Current player is {self.game_state.current_idx}.")
             return legal_actions  # Not the current player, no legal actions
 
         if player.folded or player.all_in or not player.active:
@@ -189,7 +110,7 @@ class Poker:
         return legal_actions
 
     def take_action(
-        self, player: Player = None, action_dict: ActionDict = None, idx: int = None, 
+        self, player: PlayerState = None, action_dict: ActionDict = None, idx: int = None, 
     ):
         """Execute the player's chosen action and update the game state accordingly.
         Processes the action specified in `action_dict`, ensuring it's valid for the current player.
@@ -515,7 +436,7 @@ class Poker:
 
     # Core Step Methods
     def step(
-        self, player: Player = None, action_dict: ActionDict = None, idx: int = None, 
+        self, player: PlayerState = None, action_dict: ActionDict = None, idx: int = None, 
     ) -> bool:
         """Advance the game by executing the player’s action and updating the game state.
         Handles the action, checks for round completion, advances rounds or ends the hand as needed,

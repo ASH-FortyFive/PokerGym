@@ -4,12 +4,11 @@ from typing import TYPE_CHECKING
 
 from deuces import Evaluator
 
-if TYPE_CHECKING:
-    from pokergym.env.poker_logic import PokerGameState
+from pokergym.env.states import PokerGameState
 
 
 
-def terminal_render(state: "PokerGameState", eval: Evaluator=None) -> None:
+def terminal_render(state: PokerGameState, eval: Evaluator=None) -> None:
     eval = Evaluator() if eval is None else eval
     items = {
         "ID": (3, "^"),

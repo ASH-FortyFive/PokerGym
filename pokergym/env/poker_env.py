@@ -14,7 +14,7 @@ from pokergym.env.cards import SeededDeck, card_to_int
 from pokergym.env.config import PokerConfig
 from pokergym.env.custom_spaces import MaskableBox
 from pokergym.env.enums import Action, BettingRound
-from pokergym.env.player import Player
+from pokergym.env.states import PlayerState
 from pokergym.env.poker_logic import ActionDict, Poker, PokerGameState
 from pokergym.visualise.terminal_vis import terminal_render
 
@@ -29,7 +29,7 @@ def env(**kwargs):
     env = raw_env(**kwargs)
     # env = wrappers.TerminateIllegalWrapper(env, illegal_reward=-1)
     # env = wrappers.AssertOutOfBoundsWrapper(env)
-    # env = wrappers.OrderEnforcingWrapper(env)
+    env = wrappers.OrderEnforcingWrapper(env)
     return env
 
 
@@ -71,6 +71,8 @@ class raw_env(AECEnv, EzPickle):
             agent: self.action_space(agent) for agent in self.possible_agents
         }
 
+        self._hand_over = {agent: False for agent in self.possible_agents}
+
     # Gymnasium Environment Methods
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """Reset the environment to the initial state.
@@ -93,9 +95,6 @@ class raw_env(AECEnv, EzPickle):
         self._agent_selector = AgentSelector(self.agents)
         self.agent_selection = self._agent_selector.reset()
 
-        self.agent_selection = self.inv_agent_name_mapping[
-            self.poker.game_state.current_idx
-        ]
 
     # Spaces
     @functools.lru_cache(maxsize=None)
@@ -323,6 +322,12 @@ class raw_env(AECEnv, EzPickle):
             ValueError: If the action is not valid for the current agent.
         """
         self._cumulative_rewards[self.agent_selection] = 0.0  # Clear rewards at the start of each step
+        if self._hand_over[self.agent_selection]:
+            self.infos[self.agent_selection]["hand_over"] = True
+            self._hand_over[self.agent_selection] = False
+        else:
+            self.infos[self.agent_selection]["hand_over"] = False
+
         self._clear_rewards()
         if (
             self.terminations[self.agent_selection]
@@ -331,26 +336,24 @@ class raw_env(AECEnv, EzPickle):
             self._was_dead_step(action)
             if len(self.agents) != 0:
                 self.agent_selection = self._agent_selector.next()
-            return 
+            return True
 
         agent_id = self.agent_name_mapping[self.agent_selection]
         player_deltas = None  # None if the hand is not ended
         if agent_id == self.poker.game_state.current_idx:
             action_dict = self._convert_action(action)
             player_deltas = self.poker.step(idx=agent_id, action_dict=action_dict)
-
+        hand_over = player_deltas is not None
         # Deltas being provided means the hand has ended
-        if player_deltas is not None:
+        if hand_over:
             # Calculate rewards and update game state
             for player_idx, chip_delta in player_deltas.items():
                 agent = self.inv_agent_name_mapping[player_idx]
                 norm_delta = self._norm_chip(chip_delta)
                 if agent in self.rewards:
                     self.rewards[agent] += norm_delta
+                self._hand_over[agent] = True
             self._accumulate_rewards()
-
-            
-            # self._accumulate_rewards()
 
             # Update terminations and truncations
             self.terminations = {
@@ -366,7 +369,7 @@ class raw_env(AECEnv, EzPickle):
 
         self.agent_selection = self._agent_selector.next()
         # self._clear_rewards()
-        return
+        return True
 
     def _convert_action(self, action) -> ActionDict:
         """Convert the action dictionary to a format suitable for the Poker logic.
