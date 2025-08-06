@@ -1,7 +1,7 @@
 from enum import Enum, auto
 
 
-class BettingRound(Enum):
+class BettingRound(int, Enum):
     START = 0
     PREFLOP = 1
     FLOP = 2
@@ -10,7 +10,7 @@ class BettingRound(Enum):
     SHOWDOWN = 5
     END = 6
 
-class Action(Enum):
+class Action(int, Enum):
     FOLD = 0
     CHECK = 1
     CALL = 2

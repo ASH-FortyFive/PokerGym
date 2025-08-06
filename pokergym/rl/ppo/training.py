@@ -1,28 +1,35 @@
 # https://jonathan-hui.medium.com/rl-proximal-policy-optimization-ppo-explained-77f014ec3f12
 # https://huggingface.co/learn/deep-rl-course/unit8/intuition-behind-ppo
+import os
 from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Optional
 
 import numpy as np
 import torch
 import torch.optim as optim
-# import wandb
 from tqdm import tqdm
 
 from pokergym.agents.random import RandomAgent
 from pokergym.env.config import PokerConfig
-from pokergym.env.enums import Action
 from pokergym.env.poker_logic import ActionDict
 from pokergym.env.texas_holdem import env as PokerEnv
 from pokergym.rl.encoders import ONE_HOT, flatten_space, np_dict_to_torch_dict
 from pokergym.rl.ppo.policy import PokerPolicy, PPOBuffer, update_policy
-from dataclasses import dataclass, field
-from typing import Optional
-from pokergym.env.enums import BettingRound
+
+have_wandb = False
+try:
+    import wandb
+
+    have_wandb = True
+except ImportError:
+    print("Weights & Biases not installed. Skipping W&B logging.")
 
 
 @dataclass()
 class TrainingConfig:
     """Configuration for the Training process."""
+
     num_episodes: int = 100
     max_steps: int = 6000
     clip_ratio: float = 0.2
@@ -32,15 +39,30 @@ class TrainingConfig:
     gae_lambda: float = 0.95
     seed: int = 42
 
+
+@dataclass()
+class WandbConfig:
+    """Configuration for Weights & Biases logging."""
+
+    project: str = "PokerGym"
+    entity: str = field(default_factory=lambda: os.getenv("WANDB_ENTITY", "as03095-surrey"))
+    group: str = "ppo_training"
+    name: str = "ppo_poker_training"
+    use: bool = True  # Set to False to disable W&B logging
+
+
 @dataclass()
 class Config:
     """Configuration for the training script."""
-    poker_config: PokerConfig = field(default_factory=PokerConfig)
-    training_config: TrainingConfig = field(default_factory=TrainingConfig)
+
+    poker: PokerConfig = field(default_factory=PokerConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+    wandb: WandbConfig = field(default_factory=WandbConfig)
     one_hot: bool = True
     save_every_n_episodes: int = 10
     device: str = "cuda"
     save_path: str = "checkpoints"  # Path to save the trained policy
+
 
 # --- Env Setup ---
 def make_env(poker_config: PokerConfig, seed: Optional[int] = None):
@@ -53,15 +75,13 @@ def make_env(poker_config: PokerConfig, seed: Optional[int] = None):
 def train(config: Config):
     one_hot = config.one_hot
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")
-    env = make_env(config.poker_config, seed=config.training_config.seed)
+    env = make_env(config.poker, seed=config.training.seed)
     obs_space = env.observation_spaces[env.agents[0]]
     action_space = env.action_spaces[env.agents[0]]
 
     # Initialize policies and optimizers for each agent
     policies = {
-        agent: PokerPolicy(
-            obs_space, action_space, one_hot=one_hot, device=device
-        )
+        agent: PokerPolicy(obs_space, action_space, one_hot=one_hot, device=device)
         for agent in env.agents
     }
     optimizers = {
@@ -75,18 +95,26 @@ def train(config: Config):
 
     episode_rewards = defaultdict(list)
 
-    ep_pbar = tqdm(total=config.training_config.num_episodes, desc="Training Episodes", unit="episode")
-    for ep in range(config.training_config.num_episodes):
+    ep_pbar = tqdm(
+        total=config.training.num_episodes,
+        desc="Training Episodes",
+        unit="episode",
+    )
+    for ep in range(config.training.num_episodes):
         env.reset(seed=42 * ep)  # Vary seed per episode
         done = {agent: False for agent in env.agents}
         ep_rewards = defaultdict(float)
         step = 0
 
         tournament_pbar = tqdm(
-            total=config.training_config.max_steps, desc="Train steps", unit="step", leave=False, position=1
+            total=config.training.max_steps,
+            desc="Train steps",
+            unit="step",
+            leave=False,
+            position=1,
         )
         for agent in env.agent_iter():
-            if all(done.values()) or step >= config.training_config.max_steps:
+            if all(done.values()) or step >= config.training.max_steps:
                 break
 
             observation, reward, termination, truncation, info = env.last()
@@ -110,7 +138,7 @@ def train(config: Config):
                 action, action_log_prob, bet_size, bet_log_prob, entropy, value = (
                     policies[agent].no_act(obs)
                 )
-                action_mask[-1] = 1 
+                action_mask[-1] = 1
             else:
                 action, action_log_prob, bet_size, bet_log_prob, entropy, value = (
                     policies[agent].act(obs, action_mask, bet_range)
@@ -153,16 +181,30 @@ def train(config: Config):
                 continue
 
             buffers[agent].compute_returns_and_advantages(
-                gamma=config.training_config.gamma, gae_lambda=config.training_config.gae_lambda, last_value=0.0
+                gamma=config.training.gamma,
+                gae_lambda=config.training.gae_lambda,
+                last_value=0.0,
             )
-            update_policy(
+            losses = update_policy(
                 policy=policies[agent],
                 optimizer=optimizers[agent],
                 data=buffers[agent].get(),
-                clip_ratio=config.training_config.clip_ratio,  # PPO clipping parameter
-                value_loss_coef=config.training_config.value_loss_coef,
-                entropy_coef=config.training_config.entropy_coef,
+                clip_ratio=config.training.clip_ratio,  # PPO clipping parameter
+                value_loss_coef=config.training.value_loss_coef,
+                entropy_coef=config.training.entropy_coef,
             )
+
+            if have_wandb and config.wandb.use:
+                wandb.log(
+                    {
+                        f"loss/policy_loss/{agent}": losses["policy_loss"],
+                        f"loss/value_loss/{agent}": losses["value_loss"],
+                        f"loss/entropy/{agent}": losses["entropy_loss"],
+                        f"reward/{agent}": np.mean(episode_rewards[agent]),
+                    },
+                    step=ep,
+                )
+
             buffers[agent].clear()  # Clear buffer after update
 
         # Every X episodes, play against agents that sample moves randomly, to report performance
@@ -170,14 +212,18 @@ def train(config: Config):
             chips_v_random = 0.0
             num_trials = 10
             test_pbar = tqdm(
-                total=num_trials, desc="Test Episodes", unit="trial", leave=False, position=1
+                total=num_trials,
+                desc="Test Episodes",
+                unit="trial",
+                leave=False,
+                position=1,
             )
             for trial in range(num_trials):
                 env.reset(seed=42 + trial + ep)  # Reset with a new seed
                 step = 0
                 done = {agent: False for agent in env.agents}
                 for agent in env.agent_iter():
-                    if all(done.values()) or step >= config.training_config.max_steps:
+                    if all(done.values()) or step >= config.training.max_steps:
                         break
 
                     observation, reward, termination, truncation, info = env.last()
@@ -208,7 +254,9 @@ def train(config: Config):
                             ) = policies[agent].act(obs, action_mask, bet_range)
                             env_action = ActionDict(
                                 action=action.item(),
-                                total_bet=bet_size.item() if bet_size is not None else 0.0,
+                                total_bet=(
+                                    bet_size.item() if bet_size is not None else 0.0
+                                ),
                             )
                         else:
                             bot_action_mask = {
@@ -221,17 +269,25 @@ def train(config: Config):
                     env.step(env_action)
                 test_pbar.update(1)
                 test_player_idx = env.agent_name_mapping[env.possible_agents[0]]
-                chips_v_random += int(env.poker.game_state.players[test_player_idx].chips)
+                chips_v_random += int(
+                    env.poker.game_state.players[test_player_idx].chips
+                )
             test_pbar.close()
             chips_v_random /= num_trials
 
-        if (ep + 1) % 10 == 0:
+        if (ep + 1) % 10 == 0 or ep == config.training.num_episodes - 1:
             # Save model every 10 episodes
             for agent, policy in policies.items():
                 path = f"{config.save_path}/policy_{agent}.pth"
                 policy.save(path)
 
         # Update progress bar
+        avg_rewards = {
+            f"reward/{agent}": np.mean(episode_rewards[agent][-1:])
+            for agent in env.possible_agents
+        }
+        if have_wandb and config.wandb.use:
+            wandb.log({**avg_rewards, "Chips_vs_Random": chips_v_random, "episode": ep})
         ep_pbar.set_postfix({"Chips vs Random": chips_v_random})
 
         ep_pbar.update(1)
@@ -241,7 +297,22 @@ def train(config: Config):
 
 # --- Run Training ---
 if __name__ == "__main__":
-    import tyro 
+    import tyro
+
     config = tyro.cli(Config)
 
+
+    os.makedirs(config.save_path, exist_ok=True)
+    if config.wandb.use and have_wandb:
+        wandb.init(
+            project=config.wandb.project,
+            entity=config.wandb.entity,
+            group=config.wandb.group,
+            name=config.wandb.name,
+            config=config,
+        )
+
     policies, episode_rewards = train(config)
+
+    if config.wandb.use and have_wandb:
+        wandb.finish()

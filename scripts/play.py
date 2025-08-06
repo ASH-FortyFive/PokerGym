@@ -29,7 +29,7 @@ def player_random_game(config, seed):
     print(f"Starting game with {len(agents)} agents, you are player {agents[-1].idx}.")
     prev_betting_round = BettingRound.PREFLOP
     for agent in env.agent_iter():
-        env.render()
+        # env.render()
         observation, reward, termination, truncation, info = env.last()
         action_mask = observation["action_mask"]
         if termination or truncation:
