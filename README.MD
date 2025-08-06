@@ -5,6 +5,8 @@ Uses [Gymnasium](https://gymnasium.farama.org/) (formerly OpenAI gym) and [Petti
 
 Following poker rules from [Poker Tournament Directors Association](https://www.pokertda.com/poker-tda-rules/).
 
+PPO detailes based on [OpenAI's](https://arxiv.org/abs/1707.06347) paper, but also made understandable by [Daniel Bick's](https://fse.studenttheses.ub.rug.nl/25709/1/mAI_2021_BickD.pdf) paper. 
+
 ## Installation
 To run the environment, you need to install the required dependencies currently available in `requirements.txt`.
 Additionally, you can install the optional for testing dependencies in `requirements-dev.txt`.

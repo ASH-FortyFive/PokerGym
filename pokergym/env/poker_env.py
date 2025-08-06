@@ -1,22 +1,19 @@
 import functools
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
-from deuces import Card, Evaluator
 from gymnasium.spaces import Box, Dict, Discrete, MultiBinary, MultiDiscrete
 from gymnasium.utils import EzPickle
 from pettingzoo import AECEnv
 from pettingzoo.utils import AgentSelector, wrappers
 
-from pokergym.env.cards import SeededDeck, card_to_int
+from pokergym.env.cards import card_to_int
 from pokergym.env.config import PokerConfig
 from pokergym.env.custom_spaces import MaskableBox
 from pokergym.env.enums import Action, BettingRound
-from pokergym.env.states import PlayerState
-from pokergym.env.poker_logic import ActionDict, Poker, PokerGameState
-from pokergym.visualise.terminal_vis import terminal_render
+from pokergym.env.poker_logic import ActionDict, Poker
 
 
 def env(**kwargs):
