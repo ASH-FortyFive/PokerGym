@@ -16,6 +16,7 @@ from pokergym.env.poker_logic import ActionDict
 from pokergym.env.texas_holdem import env as PokerEnv
 from pokergym.rl.encoders import ONE_HOT, flatten_space, np_dict_to_torch_dict
 from pokergym.rl.ppo.policy import PokerPolicy, PPOBuffer, update_policy
+from pokergym.rl.utils import set_seed
 
 have_wandb = False
 try:
@@ -30,14 +31,15 @@ except ImportError:
 class TrainingConfig:
     """Configuration for the Training process."""
 
-    num_episodes: int = 100
+    num_episodes: int = 10_000
     max_steps: int = 6000
     clip_ratio: float = 0.2
     value_loss_coef: float = 0.5
-    entropy_coef: float = 0.01
+    entropy_coef: float = 0.02
     gamma: float = 0.99
     gae_lambda: float = 0.95
     seed: int = 42
+    ppo_epochs: int = 4
 
 
 @dataclass()
@@ -45,7 +47,9 @@ class WandbConfig:
     """Configuration for Weights & Biases logging."""
 
     project: str = "PokerGym"
-    entity: str = field(default_factory=lambda: os.getenv("WANDB_ENTITY", "as03095-surrey"))
+    entity: str = field(
+        default_factory=lambda: os.getenv("WANDB_ENTITY", "as03095-surrey")
+    )
     group: str = "ppo_training"
     name: str = "ppo_poker_training"
     use: bool = True  # Set to False to disable W&B logging
@@ -59,9 +63,11 @@ class Config:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)
     one_hot: bool = True
+    save: bool = True  # Whether to save the model while training
     save_every_n_episodes: int = 10
     device: str = "cuda"
     save_path: str = "checkpoints"  # Path to save the trained policy
+    test: bool = True  # Whether to run a tests against random agents during training
 
 
 # --- Env Setup ---
@@ -130,6 +136,10 @@ def train(config: Config):
             obs = flatten_space(obs, device=torch.device("cuda"))
             passing = True
 
+            if torch.any(torch.isnan(action_mask)):
+                print(f"NaN detected in action mask for agent {agent}. Skipping step.")
+                continue
+
             if termination or truncation:
                 done[agent] = True
 
@@ -183,15 +193,21 @@ def train(config: Config):
             buffers[agent].compute_returns_and_advantages(
                 gamma=config.training.gamma,
                 gae_lambda=config.training.gae_lambda,
-                last_value=0.0,
             )
+            data = buffers[agent].get()
+            if torch.isnan(data["action_masks"]).any():
+                print(f"NaN detected in actions for agent {agent}. Skipping update.")
+                continue
+
             losses = update_policy(
                 policy=policies[agent],
                 optimizer=optimizers[agent],
-                data=buffers[agent].get(),
+                data=data,
                 clip_ratio=config.training.clip_ratio,  # PPO clipping parameter
                 value_loss_coef=config.training.value_loss_coef,
                 entropy_coef=config.training.entropy_coef,
+                max_grad_norm=0.5,  # Gradient clipping
+                ppo_epochs=config.training.ppo_epochs,
             )
 
             if have_wandb and config.wandb.use:
@@ -208,7 +224,7 @@ def train(config: Config):
             buffers[agent].clear()  # Clear buffer after update
 
         # Every X episodes, play against agents that sample moves randomly, to report performance
-        if (ep + 1) % 2 == 0:
+        if (ep + 1) % 2 == 0 and config.test:
             chips_v_random = 0.0
             num_trials = 10
             test_pbar = tqdm(
@@ -275,7 +291,7 @@ def train(config: Config):
             test_pbar.close()
             chips_v_random /= num_trials
 
-        if (ep + 1) % 10 == 0 or ep == config.training.num_episodes - 1:
+        if (ep + 1) % 10 == 0 or ep == config.training.num_episodes - 1 and config.save:
             # Save model every 10 episodes
             for agent, policy in policies.items():
                 path = f"{config.save_path}/policy_{agent}.pth"
@@ -301,8 +317,10 @@ if __name__ == "__main__":
 
     config = tyro.cli(Config)
 
-
     os.makedirs(config.save_path, exist_ok=True)
+    # config.wandb.use = False
+    # config.test = False  # Disable testing by default
+    # config.save = False
     if config.wandb.use and have_wandb:
         wandb.init(
             project=config.wandb.project,
@@ -312,6 +330,7 @@ if __name__ == "__main__":
             config=config,
         )
 
+    set_seed(config.training.seed)
     policies, episode_rewards = train(config)
 
     if config.wandb.use and have_wandb:

@@ -4,32 +4,45 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Categorical, Uniform
-from torch.distributions import Normal, TransformedDistribution, TanhTransform
+from torch.distributions import (
+    Categorical,
+    Normal,
+    TanhTransform,
+    TransformedDistribution,
+    Uniform,
+)
 
-from pokergym.rl.encoders import BackboneNetwork
 from pokergym.env.enums import Action
+from pokergym.rl.encoders import BackboneNetwork
+
 
 # --- Policy Network ---
 class PokerPolicy(nn.Module):
-    def __init__(self, obs_space, action_space, one_hot: bool, hidden_dim=128, device=torch.device("cpu")):
+    def __init__(
+        self,
+        obs_space,
+        action_space,
+        one_hot: bool,
+        hidden_dim=128,
+        device=torch.device("cpu"),
+    ):
         super(PokerPolicy, self).__init__()
         self.one_hot = one_hot
         self.device = device
         self.backbone = BackboneNetwork(
-            observation_space=obs_space, 
+            observation_space=obs_space,
             hidden_dimensions=hidden_dim,
             out_features=hidden_dim,
             one_hot=self.one_hot,
         )
-        self._action_dim = action_space["action"].n 
+        self._action_dim = action_space["action"].n
         self.action_head = nn.Linear(hidden_dim, self._action_dim)
         self.bet_head = nn.Linear(hidden_dim, 2)  # Mean and Std for betting
         self.value_head = nn.Linear(hidden_dim, 1)
         self.to(device)
 
     def forward(self, obs):
-        """ Process observation through the backbone and heads.
+        """Process observation through the backbone and heads.
         Args:
             obs (torch.Tensor): Input observation tensor.
         Returns:
@@ -41,10 +54,10 @@ class PokerPolicy(nn.Module):
             obs = obs.unsqueeze(0)  # Add batch dimension if needed
         x = self.backbone(obs)
         action_logits = self.action_head(x)  # [batch_size, action_dim]
-        bet_params = self.bet_head(x)       # [batch_size, 2]
-        value = self.value_head(x)          # [batch_size, 1]
+        bet_params = self.bet_head(x)  # [batch_size, 2]
+        value = self.value_head(x)  # [batch_size, 1] logits. Check input data.")
         return action_logits, bet_params, value
-    
+
     def get_value(self, obs):
         obs = torch.as_tensor(obs, dtype=torch.float32).to(self.device)
         if obs.dim() == 1:
@@ -65,7 +78,9 @@ class PokerPolicy(nn.Module):
             action_mask = action_mask.unsqueeze(0)
             bet_range = bet_range.unsqueeze(0)
 
-        action_logits, bet_params, value = self(obs)  # [batch_size, action_dim], [batch_size, 2], [batch_size, 1]
+        action_logits, bet_params, value = self(
+            obs
+        )  # [batch_size, action_dim], [batch_size, 2], [batch_size, 1]
 
         # Mask invalid actions
         action_logits = action_logits.masked_fill(~action_mask, float("-inf")).clone()
@@ -89,7 +104,7 @@ class PokerPolicy(nn.Module):
         if raise_mask.any():
             min_bets, max_bets = bet_range[:, 0], bet_range[:, 1]  # [batch_size]
             equal_bets = min_bets == max_bets  # [batch_size]
-            
+
             # Deterministic case (min_bet == max_bet)
             bet_sizes[equal_bets & raise_mask] = min_bets[equal_bets & raise_mask]
             bet_log_probs[equal_bets & raise_mask] = 0.0
@@ -97,20 +112,26 @@ class PokerPolicy(nn.Module):
             # Non-deterministic case (min_bet < max_bet)
             non_deterministic = (~equal_bets) & raise_mask
             if non_deterministic.any():
-                bet_mean, bet_std = bet_params[non_deterministic, 0], F.softplus(bet_params[non_deterministic, 1]) + 1e-6
+                bet_mean, bet_std = (
+                    bet_params[non_deterministic, 0],
+                    F.softplus(bet_params[non_deterministic, 1]) + 1e-6,
+                )
                 base_dist = Normal(bet_mean, bet_std)
                 tanh_dist = TransformedDistribution(base_dist, [TanhTransform()])
                 raw_samples = tanh_dist.rsample()  # [non_deterministic_sum]
                 eps = 1e-6
                 safe_samples = raw_samples.clamp(-1 + eps, 1 - eps)
-                bet_sizes[non_deterministic] = min_bets[non_deterministic] + 0.5 * (safe_samples + 1) * (max_bets[non_deterministic] - min_bets[non_deterministic])
-                bet_log_probs[non_deterministic] = tanh_dist.log_prob(safe_samples) - torch.log(0.5 * (max_bets[non_deterministic] - min_bets[non_deterministic]))
-
-        if torch.isnan(bet_log_probs).any():
-            raise ValueError("NaN detected in bet sizes. Check bet range and parameters.")
+                bet_sizes[non_deterministic] = min_bets[non_deterministic] + 0.5 * (
+                    safe_samples + 1
+                ) * (max_bets[non_deterministic] - min_bets[non_deterministic])
+                bet_log_probs[non_deterministic] = tanh_dist.log_prob(
+                    safe_samples
+                ) - torch.log(
+                    0.5 * (max_bets[non_deterministic] - min_bets[non_deterministic])
+                )
 
         return actions, action_log_probs, bet_sizes, bet_log_probs, entropy, value
-    
+
     def no_act(self, obs):
         # obs: [batch_size, obs_dim] or [obs_dim]
         obs = torch.as_tensor(obs, dtype=torch.float32).to(self.device)
@@ -121,10 +142,12 @@ class PokerPolicy(nn.Module):
         actions = torch.zeros(batch_size, dtype=torch.int64, device=self.device)
         bet_sizes = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
         bet_log_probs = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
-        action_log_probs = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
+        action_log_probs = torch.zeros(
+            batch_size, dtype=torch.float32, device=self.device
+        )
         entropy = torch.zeros(batch_size, dtype=torch.float32, device=self.device)
         return actions, action_log_probs, bet_sizes, bet_log_probs, entropy, value
-    
+
     def save(self, path):
         """Save the policy model to a file."""
         torch.save(self.state_dict(), path)
@@ -133,15 +156,17 @@ class PokerPolicy(nn.Module):
         """Load the policy model from a file."""
         self.load_state_dict(torch.load(path, map_location=self.device))
 
+
 # --- PPO Buffer ---
 class PPOBuffer:
     """Buffer to store experiences for PPO training."""
+
     def __init__(self, device=torch.device("cpu")):
         self.observations = []
         self.action_masks = []
         self.bet_ranges = []
 
-        self.actions = [] 
+        self.actions = []
         self.action_log_probs = []
         self.bet_sizes = []
         self.bet_log_probs = []
@@ -154,8 +179,18 @@ class PPOBuffer:
 
         self.device = device
 
-    def store(self, obs, action_mask, bet_range,
-               action, action_log_prob, bet_size, bet_log_prob, value, reward):
+    def store(
+        self,
+        obs,
+        action_mask,
+        bet_range,
+        action,
+        action_log_prob,
+        bet_size,
+        bet_log_prob,
+        value,
+        reward,
+    ):
         self.observations.append(obs)
         self.action_masks.append(action_mask)
         self.bet_ranges.append(bet_range)
@@ -168,38 +203,34 @@ class PPOBuffer:
 
         self.rewards.append(reward)
 
-    def compute_returns_and_advantages(self, last_value, gamma=0.99, gae_lambda=0.95):
-        """ Compute returns and advantages using GAE (Generalized Advantage Estimation).
+    def compute_returns_and_advantages(self, gamma=0.99, gae_lambda=0.95):
+        """Compute returns and advantages using GAE (Generalized Advantage Estimation).
         Args:
-            last_value (float): Value of the last state.
             gamma (float): Discount factor.
             gae_lambda (float): GAE lambda parameter.
         Returns:
             None: The buffer is updated in-place with computed returns and advantages.
         """
-        self.returns = []
-        self.advantages = []
-        next_value = last_value
+        rewards = torch.tensor(self.rewards, device=self.device)
+        values = torch.stack(self.values).squeeze()
+        
+        # Vectorized GAE computation
+        deltas = rewards[:-1] + gamma * values[1:] - values[:-1]
+        
+        # Compute advantages using scan operation
+        advantages = torch.zeros_like(rewards)
         gae = 0
-
-        for step in reversed(range(len(self.rewards))):
-            delta = (
-                self.rewards[step]
-                + gamma * next_value * (1 - int(step == len(self.rewards) - 1))
-                - self.values[step]
-            )
-
-            gae = delta + gamma * gae_lambda * gae * (1 - int(step == len(self.rewards) - 1))
-            self.advantages.insert(0, gae)
-
-            return_ = gae + self.values[step]
-            self.returns.insert(0, return_)
-            next_value = self.values[step]
-
-        # Normalize advantages for stability
-        advantages = torch.tensor(self.advantages, device=self.device)
+        for t in reversed(range(len(rewards) - 1)):
+            gae = deltas[t] + gamma * gae_lambda * gae
+            advantages[t] = gae
+        
+        returns = advantages + values
+        
+        # Normalize advantages per batch, not globally
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        
         self.advantages = advantages.tolist()
+        self.returns = returns.tolist()
 
     def get(self):
         data = {
@@ -216,54 +247,78 @@ class PPOBuffer:
             "bet_ranges": torch.stack(self.bet_ranges),
         }
         return data
-    
+
     def clear(self):
         self.__init__(self.device)  # Reinitialize to clear the buffer
 
-def update_policy(policy, optimizer, data, clip_ratio=0.2, value_loss_coef=0.5, entropy_coef=0.01, max_grad_norm=0.5):
+
+def update_policy(
+    policy,
+    optimizer,
+    data,
+    clip_ratio=0.2,
+    value_loss_coef=0.5,
+    entropy_coef=0.01,
+    max_grad_norm=0.5,
+    ppo_epochs=4,
+):
     policy.train()
-    optimizer.zero_grad()
-    torch.autograd.set_detect_anomaly(True)
-    # Extract data
-    obs = data["obs"].detach().clone()
-    old_actions = data["actions"].detach().clone()
-    old_action_log_probs = data["action_log_probs"].detach().clone()
-    old_bet_sizes = data["bet_sizes"].detach().clone()
-    old_bet_log_probs = data["bet_log_probs"].detach().clone()
-    advantages = data["advantages"].detach().clone()
-    returns = data["returns"].detach().clone()
-    action_masks = data["action_masks"].detach().clone()
-    bet_ranges = data["bet_ranges"].detach().clone()
 
-    # Compute new policy outputs
-    actions, action_log_probs, bet_sizes, bet_log_probs, entropies, values = policy.act(
-        obs, action_masks, bet_ranges
-    )
+    losses = {"policy_loss": 0, "value_loss": 0, "entropy_loss": 0}
 
-    # Compute policy loss
-    ratio = torch.exp(action_log_probs - old_action_log_probs)
-    ratio = ratio * torch.exp(bet_log_probs - old_bet_log_probs)
+    for epoch in range(ppo_epochs):
+        optimizer.zero_grad()
 
-    surr1 = ratio * advantages
-    surr2 = torch.clamp(ratio, 1 - clip_ratio, 1 + clip_ratio) * advantages
-    policy_loss = -torch.min(surr1, surr2).mean()
+        # Extract data
+        obs = data["obs"].detach().clone()
+        old_actions = data["actions"].detach().clone()
+        old_action_log_probs = data["action_log_probs"].detach().clone()
+        old_bet_sizes = data["bet_sizes"].detach().clone()
+        old_bet_log_probs = data["bet_log_probs"].detach().clone()
+        advantages = data["advantages"].detach().clone()
+        returns = data["returns"].detach().clone()
+        action_masks = data["action_masks"].detach().clone()
+        bet_ranges = data["bet_ranges"].detach().clone()
 
-    # Compute value loss
-    value_loss = F.mse_loss(values.squeeze(), returns)
+        # Compute new policy outputs
+        actions, action_log_probs, bet_sizes, bet_log_probs, entropies, values = (
+            policy.act(obs, action_masks, bet_ranges)
+        )
 
-    # Compute entropy bonus
-    entropy_loss = -entropies.mean()
+        # Compute policy loss
+        ratio_input = (action_log_probs - old_action_log_probs) + (
+            bet_log_probs - old_bet_log_probs
+        )
+        ratio_input = torch.clamp(
+            ratio_input, min=-20, max=2
+        )  # Clamped as we want to avoid extreme values
 
-    # Total loss
-    loss = policy_loss + value_loss_coef * value_loss + entropy_coef * entropy_loss
+        ratio = torch.exp(ratio_input)
 
-    # Backpropagation
-    loss.backward()
-    torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
-    optimizer.step()
+        surr1 = ratio * advantages
+        surr2 = torch.clamp(ratio, 1 - clip_ratio, 1 + clip_ratio) * advantages
+        policy_loss = -torch.min(surr1, surr2).mean()
 
-    return {
-        "policy_loss": policy_loss.item(),
-        "value_loss": value_loss.item(),
-        "entropy_loss": entropy_loss.item(),
-    }
+        # Compute value loss
+        value_loss = F.mse_loss(values.squeeze(), returns)
+
+        # Compute entropy bonus
+        entropy_loss = -entropies.mean()
+
+        # Total loss
+        loss = policy_loss + value_loss_coef * value_loss + entropy_coef * entropy_loss
+
+        # Backpropagation
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(policy.parameters(), max_grad_norm)
+        optimizer.step()
+
+        losses["policy_loss"] += policy_loss.item()
+        losses["value_loss"] += value_loss.item()
+        losses["entropy_loss"] += entropy_loss.item()
+
+    # Average over epochs
+    for key in losses:
+        losses[key] /= ppo_epochs
+
+    return losses
