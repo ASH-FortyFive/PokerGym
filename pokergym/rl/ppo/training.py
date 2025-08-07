@@ -40,6 +40,7 @@ class TrainingConfig:
     gae_lambda: float = 0.95
     seed: int = 42
     ppo_epochs: int = 4
+    learning_rate: float = 3e-4
 
 
 @dataclass()
@@ -91,7 +92,7 @@ def train(config: Config):
         for agent in env.agents
     }
     optimizers = {
-        agent: optim.Adam(policies[agent].parameters(), lr=3e-4) for agent in env.agents
+        agent: optim.Adam(policies[agent].parameters(), lr=config.training.learning_rate) for agent in env.agents
     }
     buffers = {agent: PPOBuffer(device="cuda") for agent in env.agents}
 
